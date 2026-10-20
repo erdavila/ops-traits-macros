@@ -112,7 +112,7 @@
 */
 
 /*
-   CLAUSE := UNOP TYPE
+   CLAUSE := UNOP TYPE ('=' ASSOC)?
            | LEFT BINOP  RIGHT ('=' ASSOC)?
            | LEFT BINOP= RIGHT
            | LEFT ':'    PATH-LIKE
@@ -162,7 +162,7 @@ macro_rules! __with_ops_bounds {
      */
 
     (@left  [$($done:tt)*]  [/*PENDING*/]  $return_c:tt) => {
-        // Nothing to parse
+        // Nothing to parse.
         $crate::__return!(( $($done)* ) $return_c)
     };
 
@@ -321,8 +321,74 @@ macro_rules! __with_ops_bounds {
 
 #[macro_export]
 macro_rules! ops_type {
-    () => {
-        compile_error!("Not implemented")
+    ($($operation:tt)+) => {
+        $crate::__parse_operation!(@left [$($operation)+])
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __parse_operation {
+    (@left $pending_s:tt) => {
+        // Parses the left side.
+        $crate::__parse_type!(
+            []  $pending_s
+            { $crate::__parse_operation!(@op) }
+        )
+    };
+
+    /*
+     * @op ([LEFT] [PENDING])
+     */
+
+    // No operator and right side.
+    (@op ([$($left:tt)+] [])) => {
+        $($left)+
+    };
+
+    // There is an operator and right side.
+    (@op ($left_s:tt  [$op:tt  $($pending:tt)+])) => {
+        $crate::__op_info!(
+            $op
+            { $crate::__parse_operation!(@right $left_s [$($pending)+]) }
+        )
+    };
+
+    /*
+     * @right [LEFT] [PENDING] ([TRAIT] ASSOC-TYPE-NAME))
+     */
+
+    // The right side IS '_'.
+    (@right  $left_s:tt  [_] ($trait_s:tt  $assoc_type_name:ident)) => {
+        $crate::__parse_operation!(@end  $left_s  $trait_s  [/*RIGHT*/]  $assoc_type_name)
+    };
+
+    (@right  $left_s:tt  $pending_s:tt ($trait_s:tt  $assoc_type_name:ident)) => {
+        $crate::__parse_type!(
+            []  $pending_s
+            { $crate::__parse_operation!(@right_type_return  $left_s  $trait_s  $assoc_type_name) }
+        )
+    };
+
+    /*
+     * @right_type_return [LEFT] [TRAIT] ASSOC-TYPE-NAME ([RIGHT] [PENDING])
+     */
+    (@right_type_return  $left_s:tt  $trait_s:tt  $assoc_type_name:ident  ($right_s:tt  [/*PENDING*/])) => {
+        $crate::__parse_operation!(@end  $left_s  $trait_s  $right_s  $assoc_type_name)
+    };
+
+    /*
+     * @end [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME]
+     */
+
+    // Right operand IS `Self`.
+    (@end  [$($left:tt)+]  [$($trait:tt)+]  []  $assoc_type_name:ident) => {
+        < $($left)+ as $($trait)+ >:: $assoc_type_name
+    };
+
+    // Right operand is NOT `Self`.
+    (@end  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  $assoc_type_name:ident) => {
+        < $($left)+ as $($trait)+ < $($right)+ > >:: $assoc_type_name
     };
 }
 
@@ -383,7 +449,10 @@ macro_rules! __parse_path_like {
     //    [] [< ... >   PENDING] {RETURN}
     // -> [   < ... >] [PENDING] {RETURN}
     ([/*PATH*/] [ < $($pending:tt)+ ] $return_c:tt) => {
-        compile_error!("Not implemented")
+        $crate::__parse_angle_brackets_content!(
+            [] [$($pending)+]
+            { $crate::__parse_path_like!(@angle_return $return_c) }
+        )
     };
 
     //        [] [PENDING] {RETURN}
@@ -404,7 +473,7 @@ macro_rules! __parse_path_like {
     //    [PATH] [:: IDENTIFIER   PENDING] {RETURN}
     // -> [PATH   :: IDENTIFIER] [PENDING] {RETURN}
     ([ $($path:tt)+ ] [ :: $ident:ident $($pending:tt)* ] $return_c:tt) => {
-        compile_error!("Not implemented")
+        $crate::__parse_path_like!([$($path)+ ::  $ident]  [$($pending)*]  $return_c)
     };
 
     //    [PATH] [:: < ... >   PENDING] {RETURN}
@@ -420,6 +489,16 @@ macro_rules! __parse_path_like {
             ( $path_s  $pending_s )
             $return_c
         )
+    };
+
+    /*
+     * @angle_return {RETURN} ([CONTENT] [PENDING])
+     */
+
+    //                             {RETURN} ([CONTENT] [PENDING])
+    // ->  [< CONTENT >] [PENDING] {RETURN}
+    (@angle_return $return_c:tt ([$($content:tt)*] $pending_s:tt)) => {
+        $crate::__parse_path_like!([< $($content)* >]  $pending_s  $return_c)
     };
 }
 
@@ -493,6 +572,17 @@ macro_rules! __parse_angle_brackets_content {
      * Returns [PARSED TOKENS] [AFTER]
      */
 
+    //        [PARSED] [>> PENDING] {RETURN}
+    // return [PARSED]  [> PENDING]
+    // ('>>' is parsed as a single token)
+    // (One closing '>' is discarded)
+    ($parsed_s:tt [>> $($pending:tt)*] $return_c:tt) => {
+        $crate::__return!(
+            ($parsed_s  [> $($pending)*])
+            $return_c
+        )
+    };
+
     //        [PARSED] [> PENDING] {RETURN}
     // return [PARSED]   [PENDING]
     // (The closing '>' is discarded)
@@ -500,16 +590,36 @@ macro_rules! __parse_angle_brackets_content {
         $crate::__return!(($parsed_s  [$($pending)*])  $return_c)
     };
 
-    //    [PARSED] [< INSIDE >    PENDING > AFTER] {RETURN}
-    // -> [PARSED   < INSIDE >] [ PENDING > AFTER] {RETURN}
-    ([$($parsed:tt)*] [> $($pending:tt)*] $return_c:tt) => {
+    // ('<<' is parsed as a single token)
+    ([$($parsed:tt)*] [<< $($pending:tt)*] $return_c:tt) => {
         compile_error!("Not implemented")
+    };
+
+    //    [PARSED] [< ... >   PENDING] {RETURN}
+    // -> [PARSED   < ... >] [PENDING] {RETURN}
+    ($parsed_s:tt [< $($pending:tt)*] $return_c:tt) => {
+        // "Recursive" call.
+        $crate::__parse_angle_brackets_content!(
+            [] [$($pending)*]
+            { $crate::__parse_angle_brackets_content!(@angle_return  $parsed_s  $return_c) }
+        )
     };
 
     //    [PARSED] [TOKEN    PENDING > AFTER] {RETURN}
     // -> [PARSED   TOKEN] [ PENDING > AFTER] {RETURN}
     ([$($parsed:tt)*] [$tok:tt $($pending:tt)*] $return_c:tt) => {
         $crate::__parse_angle_brackets_content!([$($parsed)*  $tok] [$($pending)*]  $return_c)
+    };
+
+    /*
+     * @angle_return [PARSED] {RETURN} ([CONTENT] [PENDING])
+     */
+
+    //    [PARSED]                       {RETURN} ([CONTENT] [PENDING])
+    // -> [PARSED < CONTENT >] [PENDING] {RETURN}
+    (@angle_return  [$($parsed:tt)*]  $return_c:tt  ([$($content:tt)*]  $pending_s:tt)) => {
+        // Returning from "recursive" call.
+        $crate::__parse_angle_brackets_content!([$($parsed)* < $($content)* >]  $pending_s  $return_c)
     };
 }
 

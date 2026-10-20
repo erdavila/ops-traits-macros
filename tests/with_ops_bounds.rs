@@ -1,3 +1,6 @@
+// Import with different names so that the macro doesn't make use of the imports.
+use std::ops::{Add as Add_, Mul as Mul_, Sub as Sub_};
+
 use ops_traits_macros::with_ops_bounds;
 
 macro_rules! assert_ops_bounds {
@@ -16,9 +19,9 @@ fn empty() {
     with_ops_bounds!(
         { /*empty*/ },
         ($($bounds:tt)*) => {
-            fn square<T>(x: T) -> <T as ::core::ops::Mul>::Output
+            fn square<T>(x: T) -> <T as Mul_>::Output
             where
-                T: ::core::ops::Mul + Copy,
+                T: Mul_ + Copy,
                 $($bounds)*
             {
                 x * x
@@ -43,7 +46,7 @@ fn op_with_self() {
             T * _,
         },
         ($($bounds:tt)*) => {
-            fn square<T>(x: T) -> <T as ::core::ops::Mul>::Output
+            fn square<T>(x: T) -> <T as Mul_>::Output
             where
                 T: Copy,
                 $($bounds)*
@@ -70,7 +73,7 @@ fn op_with_other() {
             T * U,
         },
         ($($bounds:tt)*) => {
-            fn multiply<T, U>(x: T, y: U) -> <T as ::core::ops::Mul<U>>::Output
+            fn multiply<T, U>(x: T, y: U) -> <T as Mul_<U>>::Output
             where
                 $($bounds)*
             {
@@ -146,7 +149,7 @@ fn regular_bounds() {
 
     with_ops_bounds!(
         {
-            T: ::core::ops::Mul<U, Output = O>,
+            T: Mul_<U, Output = O>,
         },
         ($($bounds:tt)*) => {
             fn multiply<T, U, O>(x: T, y: U) -> O
@@ -180,7 +183,7 @@ fn multiple_clauses() {
             O: Copy,
         },
         ($($bounds:tt)*) => {
-            fn calculate<T, U, O>(x: T, y: U) -> <O as ::core::ops::Add>::Output
+            fn calculate<T, U, O>(x: T, y: U) -> <O as Add_>::Output
             where $($bounds)*
             {
                 let z = x * y;
@@ -191,4 +194,67 @@ fn multiple_clauses() {
 
     let result = calculate(2, 3);
     assert_eq!(result, 12);
+}
+
+#[test]
+fn nested_operation_at_left() {
+    with_ops_bounds!(
+        {
+            T - U,
+            (T - U) * V,
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U, V>(x: T, y: U, z: V) -> <<T as Sub_<U>>::Output as Mul_<V>>::Output
+            where
+                $($bounds)*
+            {
+                (x - y) * z
+            }
+        };
+    );
+
+    let result = calculate(5, 3, 4);
+    assert_eq!(result, 8);
+}
+
+#[test]
+fn nested_operation_at_right() {
+    with_ops_bounds!(
+        {
+            U * V,
+            T - (U * V),
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U, V>(x: T, y: U, z: V) -> <T as Sub_<<U as Mul_<V>>::Output>>::Output
+            where
+                $($bounds)*
+            {
+                x - (y * z)
+            }
+        };
+    );
+
+    let result = calculate(7, 3, 2);
+    assert_eq!(result, 1);
+}
+
+#[test]
+fn nested_operation_at_right_with_output() {
+    with_ops_bounds!(
+        {
+            U * V,
+            T - (U * V) = O,
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U, V, O>(x: T, y: U, z: V) -> O
+            where
+                $($bounds)*
+            {
+                x - (y * z)
+            }
+        };
+    );
+
+    let result = calculate(7, 3, 2);
+    assert_eq!(result, 1);
 }

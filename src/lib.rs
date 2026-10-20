@@ -299,6 +299,8 @@ macro_rules! __with_ops_bounds {
     };
 
     // Right operand is NOT `Self`. WITH associated type.
+    //    [DONE LEFT : TRAIT] [RIGHT] [ASSOC-TYPE-NAME   ASSOC-TYPE]    [PENDING] {RETURN}
+    // -> [DONE LEFT : TRAIT  <RIGHT,  ASSOC-TYPE-NAME = ASSOC-TYPE >,] [PENDING] {RETURN}
     (@end  [$($done:tt)+]  [$($right:tt)+]  [$assoc_type_name:ident $($assoc_type:tt)+]  $pending_s:tt  $return_c:tt) => {
         $crate::__with_ops_bounds!(@next [$($done)+ < $($right)+, $assoc_type_name = $($assoc_type)+ >,]  $pending_s  $return_c)
     };
@@ -322,14 +324,14 @@ macro_rules! __with_ops_bounds {
 #[macro_export]
 macro_rules! ops_type {
     ($($operation:tt)+) => {
-        $crate::__parse_operation!(@left [$($operation)+])
+        $crate::__parse_operation!([$($operation)+])
     };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __parse_operation {
-    (@left $pending_s:tt) => {
+    ($pending_s:tt) => {
         // Parses the left side.
         $crate::__parse_type!(
             []  $pending_s
@@ -341,12 +343,12 @@ macro_rules! __parse_operation {
      * @op ([LEFT] [PENDING])
      */
 
-    // No operator and right side.
+    // No operator or right side.
     (@op ([$($left:tt)+] [])) => {
         $($left)+
     };
 
-    // There is an operator and right side.
+    // There is an operator and a right side.
     (@op ($left_s:tt  [$op:tt  $($pending:tt)+])) => {
         $crate::__op_info!(
             $op
@@ -400,6 +402,7 @@ macro_rules! __parse_type {
      * Returns [PARSED-TYPE] [REMAINING-TOKENS]
      */
 
+    // TODO: remove initial [] ?
     ([] $pending_s:tt  $return_c:tt) => {
         // Tries to parse as a PATH-LIKE.
         $crate::__parse_path_like!(
@@ -413,8 +416,11 @@ macro_rules! __parse_type {
      */
 
     // The type is NOT a PATH-LIKE.
-    (@path_like_return  $return_c:tt  ( [/*TYPE*/] [ $($pending:tt)* ] )) => {
-        compile_error!("Not implemented")
+    (@path_like_return  $return_c:tt  ( [/*TYPE*/] [ ( $($operation:tt)+ ) $($pending:tt)* ] )) => {
+        $crate::__return!(
+            ([$crate::__parse_operation!( [$($operation)+] )] [$($pending)*])
+            $return_c
+        )
     };
 
     // The path IS a PATH-LIKE.
@@ -510,12 +516,16 @@ macro_rules! __op_info {
      * Returns (TRAIT ASSOC-TYPE?)
      */
 
-    (* $return_c:tt) => {
-        $crate::__return!(([::core::ops::Mul] Output) $return_c)
-    };
-
     (+ $return_c:tt) => {
         $crate::__return!(([::core::ops::Add] Output) $return_c)
+    };
+
+    (- $return_c:tt) => {
+        $crate::__return!(([::core::ops::Sub] Output) $return_c)
+    };
+
+    (* $return_c:tt) => {
+        $crate::__return!(([::core::ops::Mul] Output) $return_c)
     };
 }
 
@@ -568,8 +578,8 @@ macro_rules! __parse_thing {
 macro_rules! __parse_angle_brackets_content {
     /*
      * [PARSED] [TOKENS > AFTER] {RETURN}
-     * The opening '<' must already have being consumed.
      * Returns [PARSED TOKENS] [AFTER]
+     * The opening '<' must already have being consumed.
      */
 
     //        [PARSED] [>> PENDING] {RETURN}

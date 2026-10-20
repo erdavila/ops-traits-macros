@@ -1,40 +1,93 @@
-use ops_traits_macros::ops_type;
+// Import with different names so that the macro doesn't make use of the imports.
+use std::ops::{Mul as Mul_, Sub as Sub_};
+
+mod same_type_eq {
+    pub(crate) trait _TypeEq {}
+
+    impl<T> _TypeEq for (T, T) {}
+
+    #[allow(dead_code)]
+    pub(crate) fn assert_same_type<T, U>()
+    where
+        (T, U): _TypeEq,
+    {
+    }
+}
+
+macro_rules! assert_same_type {
+    (
+        ops_type!( $($op_type:tt)+ ), $rust_type:ty $(,)?
+        $(
+            {
+                $( < $($gen:ident),* > )?
+                $( where $($where:tt)* )?
+            }
+        )?
+    ) => {
+        {
+            fn _f $($( < $($gen),* > )?)? () $($( where $($where)* )?)? {
+                use ops_traits_macros::ops_type;
+                crate::same_type_eq::assert_same_type::<ops_type!( $($op_type)+ ), $rust_type>();
+            }
+        }
+    };
+}
 
 #[test]
 fn op_with_self() {
-    fn square<T>(x: T) -> ops_type!(T * _)
-    where
-        T: ::core::ops::Mul + Copy,
-    {
-        x * x
-    }
-
-    let result = square(2);
-    assert_eq!(result, 4);
+    assert_same_type!(
+        ops_type!(T * _),
+        <T as Mul_>::Output,
+        { <T> where T: Mul_ }
+    );
 }
 
 #[test]
 fn op_with_other() {
-    fn multiply<T, U>(x: T, y: U) -> ops_type!(T * U)
-    where
-        T: ::core::ops::Mul<U>,
-    {
-        x * y
-    }
+    assert_same_type!(
+        ops_type!(T * U),
+        <T as Mul_<U>>::Output
+        { <T, U> where T: Mul_<U> }
+    );
+}
 
-    let result = multiply(2, 3);
-    assert_eq!(result, 6);
+#[test]
+fn nested_operation_at_left() {
+    assert_same_type!(
+        ops_type!((T - U) * V),
+        <<T as Sub_<U>>::Output as Mul_<V>>::Output
+        {
+            <T, U, V>
+            where
+                T: Sub_<U>,
+                <T as Sub_<U>>::Output: Mul_<V>,
+        }
+    );
+}
+
+#[test]
+fn nested_operation_at_right() {
+    assert_same_type!(
+        ops_type!(T - (U * V)),
+        <T as Sub_<<U as Mul_<V>>::Output>>::Output,
+        {
+            <T, U, V>
+            where
+                U: Mul_<V>,
+                T: Sub_<<U as Mul_<V>>::Output>,
+        }
+    );
 }
 
 #[test]
 fn regular_type() {
-    fn multiply<T, U>(x: T, y: U) -> ops_type!(<T as ::core::ops::Mul<U>>::Output)
-    where
-        T: ::core::ops::Mul<U>,
-    {
-        x * y
-    }
-
-    let result = multiply(2, 3);
-    assert_eq!(result, 6);
+    assert_same_type!(
+        ops_type!(<T as Mul_<U>>::Output),
+        <T as Mul_<U>>::Output,
+        {
+            <T, U>
+            where
+                T: Mul_<U>,
+        }
+    );
 }

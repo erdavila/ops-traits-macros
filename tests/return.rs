@@ -1,6 +1,9 @@
 macro_rules! with_clone_bound {
     ($type:ty, $($return:tt)+) => {
-        ops_traits_macros::__return!([$type: Clone] $($return)+)
+        ops_traits_macros::__return!(
+            ( $type: Clone )
+            { $($return)+ }
+        )
     };
 }
 
@@ -36,7 +39,7 @@ fn cps_return() {
                 );
             };
 
-            (@return $name:ident $($bounds:tt)*) => {
+            (@return $name:ident ( $($bounds:tt)* )) => {
                 fn $name<T>(x: &T) -> T
                 where
                     $($bounds)*

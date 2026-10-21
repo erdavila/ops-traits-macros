@@ -112,212 +112,36 @@
 */
 
 /*
-   CLAUSE := UNOP TYPE ('=' ASSOC)?
-           | LEFT BINOP  RIGHT ('=' ASSOC)?
-           | LEFT BINOP= RIGHT
-           | LEFT ':'    PATH-LIKE
-   OPERATION := UNOP TYPE
-              | LEFT BINOP RIGHT
-              | TYPE
+    CLAUSES := EMPTY | CLAUSE (',' CLAUSES?)?
 
-   LEFT := TYPE
-   RIGHT := TYPE | '_'
-   ASSOC := TYPE
-   TYPE := PATH-LIKE | '(' OPERATION ')'
-   PATH-LIKE := SEGMENT ('::' SEGMENT)*
-   SEGMENT := IDENTIFIER ('<' ... '>')? | '<' ... '>'
+    CLAUSE := UNOP OPERAND ('=' ASSOC)?
+            | LEFT BINOP RIGHT ('=' ASSOC)?
+            | LEFT ':' RAW-BOUND
+    OPERATION := UNOP OPERAND
+               | LEFT (BINOP RIGHT)?
 
+    OPERAND := TYPE
+    ASSOC := TYPE
+    LEFT := TYPE
+    RIGHT := '_' | TYPE
+    TYPE := '(' OPERATION ')' | RAW-TYPE
 
-   1. LEFT
-       : PATH-LIKE
-       | '(' OPERATION ')'
-   2. OP
-   3. RIGHT
-       : PATH-LIKE
-       | '(' OPERATION ')'
-       | '_'  /* depending on the OP */
-   4. = OUT   /* depending on the OP */
+    RAW-TYPE := everything except BINOP or ':' or '=' or ','
+    RAW-BOUND := everything except ','
 */
 
 #[macro_export]
 macro_rules! with_ops_bounds {
     (( $($bounds:tt)* ), $($return:tt)+) => {
-        $crate::__with_ops_bounds!(@left [] [$($bounds)*] {$($return)+})
+        $crate::__parse_clauses!([$($bounds)*] {$($return)+})
     };
 
     ([ $($bounds:tt)* ], $($return:tt)+) => {
-        $crate::__with_ops_bounds!(@left [] [$($bounds)*] {$($return)+})
+        $crate::__parse_clauses!([$($bounds)*] {$($return)+})
     };
 
     ({ $($bounds:tt)* }, $($return:tt)+) => {
-        $crate::__with_ops_bounds!(@left [] [$($bounds)*] {$($return)+})
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __with_ops_bounds {
-    /*
-     * @left [DONE] [PENDING] {RETURN}
-     */
-
-    (@left  [$($done:tt)*]  [/*PENDING*/]  $return_c:tt) => {
-        // Nothing to parse.
-        $crate::__return!(( $($done)* ) $return_c)
-    };
-
-    (@left  $done_s:tt  $pending_s:tt  $return_c:tt) => {
-        // Parses the left side.
-        $crate::__parse_type!(
-            []  $pending_s
-            { $crate::__with_ops_bounds!(@left_type_return  $done_s  $return_c) }
-        )
-    };
-
-    /*
-     * @left_type_return [DONE] {RETURN} ([LEFT] [PENDING])
-     */
-
-    //    [DONE]                {RETURN} ([LEFT] [PENDING])
-    // -> [DONE LEFT] [PENDING] {RETURN}
-    (@left_type_return [ $($done:tt)* ] $return_c:tt ([ $($left:tt)+ ]  $pending_s:tt)) => {
-        $crate::__with_ops_bounds!(@op [ $($done)* $($left)+ ]  $pending_s  $return_c)
-    };
-
-    /*
-     * @op [DONE LEFT] [PENDING] {RETURN}
-     */
-
-    // Regular Rust bound (with ':').
-    (@op  $done_s:tt  [ :  $($pending:tt)+ ]  $return_c:tt) => {
-        $crate::__parse_thing!(
-            [] [$($pending)+]
-            { $crate::__with_ops_bounds!(@regular_bound_return  $done_s  $return_c) }
-        )
-    };
-
-    (@op  $done_s:tt  [ $op:tt  $($pending:tt)+ ]  $return_c:tt) => {
-        $crate::__op_info!(
-            $op
-            { $crate::__with_ops_bounds!(@op_info_return  $done_s  [$($pending)+]  $return_c) }
-        )
-    };
-
-    /*
-     * @regular_bound_return [DONE LEFT] {RETURN} ([BOUND] [PENDING])
-     */
-
-    //    [DONE LEFT]                   {RETURN} ([BOUND] [PENDING])
-    // -> [DONE LEFT : BOUND] [PENDING] {RETURN}
-    (@regular_bound_return  [$($done:tt)+]  $return_c:tt ([$($bound:tt)+]  $pending_s:tt)) => {
-        // [DONE] [PENDING] {RETURN}
-        $crate::__with_ops_bounds!(@next [$($done)+ : $($bound)+,] $pending_s  $return_c)
-    };
-
-    /*
-     * @op_info_return [DONE LEFT] [PENDING] {RETURN} (TRAIT ASSOC-TYPE-NAME?)
-     */
-
-    //    [DONE LEFT]                            [PENDING] {RETURN} (TRAIT ASSOC-TYPE-NAME?)
-    // -> [DONE LEFT : TRAIT] [ASSOC-TYPE-NAME?] [PENDING] {RETURN}
-    (@op_info_return  [$($done:tt)+]  $pending_s:tt  $return_c:tt  ([$($trait:tt)+] $($assoc_type_name:ident)?)) => {
-        $crate::__with_ops_bounds!(@right [$($done)+ : $($trait)+] [$($assoc_type_name)?] $pending_s  $return_c)
-    };
-
-    /*
-     * @right [DONE LEFT : TRAIT] [ASSOC-TYPE-NAME?] [PENDING] {RETURN}
-     */
-
-    // The right side IS '_'.
-    (@right  $done_s:tt  $assoc_type_name_s:tt  [_ $($pending:tt)*]  $return_c:tt) => {
-        $crate::__with_ops_bounds!(@assoc  $done_s  [/*RIGHT*/]  $assoc_type_name_s  [$($pending)*]  $return_c)
-    };
-
-    // The right side is NOT '_'.
-    (@right  $done_s:tt  $assoc_type_name_s:tt  $pending_s:tt  $return_c:tt) => {
-        $crate::__parse_type!(
-            []  $pending_s
-            { $crate::__with_ops_bounds!(@right_type_return  $done_s  $assoc_type_name_s  $return_c) }
-        )
-    };
-
-    /*
-     * @right_type_return [DONE LEFT : TRAIT] [ASSOC-TYPE-NAME?] {RETURN} ([RIGHT] [PENDING])
-     */
-
-    (@right_type_return  $done_s:tt  $assoc_type_name_s:tt  $return_c:tt  ($right_s:tt  $pending_s:tt)) => {
-        $crate::__with_ops_bounds!(@assoc  $done_s  $right_s  $assoc_type_name_s  $pending_s  $return_c)
-    };
-
-    /*
-     * @assoc [DONE LEFT : TRAIT] [RIGHT] [ASSOC-TYPE-NAME?] [PENDING] {RETURN}
-     */
-
-    // With associated type.
-    (@assoc $done_s:tt  $right_s:tt  [$assoc_type_name:ident]  [= $($pending:tt)+]  $return_c:tt) => {
-        $crate::__parse_type!(
-            [] [$($pending)+]
-            { $crate::__with_ops_bounds!(@assoc_return  $done_s  $right_s  [$assoc_type_name]  $return_c) }
-        )
-    };
-
-    // No associated type.
-    (@assoc $done_s:tt  $right_s:tt  $assoc_type_name_s:tt  $pending_s:tt  $return_c:tt) => {
-        $crate::__with_ops_bounds!(@end  $done_s  $right_s  []  $pending_s  $return_c)
-    };
-
-    /*
-     * @assoc_return [DONE LEFT : TRAIT] [RIGHT] [ASSOC-TYPE-NAME] {RETURN}
-     */
-    (@assoc_return  $done_s:tt  $right_s:tt [$assoc_type_name:ident]  $return_c:tt ([$($assoc_type:tt)+] $pending_s:tt)) => {
-        $crate::__with_ops_bounds!(@end $done_s  $right_s  [$assoc_type_name  $($assoc_type)+]  $pending_s  $return_c)
-    };
-
-    /*
-     * @end [DONE LEFT : TRAIT] [RIGHT] [ASSOC-TYPE-NAME? ASSOC-TYPE?] [PENDING] {RETURN}
-     */
-
-    // Right operand IS `Self`. NO associated type.
-    //    [DONE LEFT : TRAIT] [] [] [PENDING] {RETURN}
-    // -> [DONE LEFT : TRAIT,]      [PENDING] {RETURN}
-    (@end  [$($done:tt)+]  [/*RIGHT*/]  [/*ASSOC-TYPE*/]  $pending_s:tt  $return_c:tt) => {
-        $crate::__with_ops_bounds!(@next  [$($done)+,]  $pending_s  $return_c)
-    };
-
-    // Right operand IS `Self`. WITH associated type.
-    //    [DONE LEFT : TRAIT] [] [ASSOC-TYPE-NAME   ASSOC-TYPE]    [PENDING] {RETURN}
-    // -> [DONE LEFT : TRAIT    < ASSOC-TYPE-NAME = ASSOC-TYPE >,] [PENDING] {RETURN}
-    (@end  [$($done:tt)+]  [/*RIGHT*/]  [$assoc_type_name:ident $($assoc_type:tt)+]  $pending_s:tt  $return_c:tt) => {
-        $crate::__with_ops_bounds!(@next [$($done)+ < $assoc_type_name = $($assoc_type)+ >,]  $pending_s  $return_c)
-    };
-
-    // Right operand is NOT `Self`. NO associated type.
-    //    [DONE LEFT : TRAIT] [RIGHT] [] [PENDING] {RETURN}
-    // -> [DONE LEFT : TRAIT  <RIGHT>,]  [PENDING] {RETURN}
-    (@end  [$($done:tt)+]  [$($right:tt)+]  [/*ASSOC-TYPE*/]  $pending_s:tt  $return_c:tt) => {
-        $crate::__with_ops_bounds!(@next [$($done)+ < $($right)+ >,]  $pending_s  $return_c)
-    };
-
-    // Right operand is NOT `Self`. WITH associated type.
-    //    [DONE LEFT : TRAIT] [RIGHT] [ASSOC-TYPE-NAME   ASSOC-TYPE]    [PENDING] {RETURN}
-    // -> [DONE LEFT : TRAIT  <RIGHT,  ASSOC-TYPE-NAME = ASSOC-TYPE >,] [PENDING] {RETURN}
-    (@end  [$($done:tt)+]  [$($right:tt)+]  [$assoc_type_name:ident $($assoc_type:tt)+]  $pending_s:tt  $return_c:tt) => {
-        $crate::__with_ops_bounds!(@next [$($done)+ < $($right)+, $assoc_type_name = $($assoc_type)+ >,]  $pending_s  $return_c)
-    };
-
-    /*
-     * @next [DONE] [PENDING] {RETURN}
-     */
-
-    // Comma.
-    (@next $done_s:tt [ , $($pending:tt)* ] $return_c:tt) => {
-        // Parse next clause.
-        $crate::__with_ops_bounds!(@left  $done_s  [$($pending)*]  $return_c)
-    };
-
-    // No more tokens.
-    (@next [$($done:tt)*] [/*PENDING*/] $return_c:tt) => {
-        $crate::__return!(( $($done)* ) $return_c)
+        $crate::__parse_clauses!([$($bounds)*] {$($return)+})
     };
 }
 
@@ -328,194 +152,469 @@ macro_rules! ops_type {
     };
 }
 
+/*
+ * | Input    | Returns
+ * |----------|----------
+ * | [TOKENS] | CLAUSES
+ */
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __parse_clauses {
+    //             [TOKENS] {RETURN}
+    // -> @loop [] [TOKENS] {RETURN}
+    ([$($tokens:tt)*]  $return_c:tt) => {
+        $crate::__parse_clauses!(@loop  []  [$($tokens)*]  $return_c)
+    };
+
+    /*
+     * @loop [DONE] [TOKENS] {RETURN}
+     */
+
+    // No tokens.
+    // @loop   [DONE] [] {RETURN}
+    // Return: DONE
+    (@loop  [$($done:tt)*]  [/*TOKENS*/]  $return_c:tt) => {
+        $crate::__return!(( $($done)* )  $return_c)
+    };
+
+    //    @loop          [DONE] [TOKENS] {RETURN}
+    // -> @clause_return [DONE]          {RETURN} ([CLAUSE] [DELIMITER] [REMAINING])
+    (@loop  $done_s:tt  $tokens_s:tt  $return_c:tt) => {
+        $crate::__parse_clause!(
+            $tokens_s
+            { $crate::__parse_clauses!(@clause_return  $done_s  $return_c) }
+        )
+    };
+
+    /*
+     * @clause_return [DONE] {RETURN} ([CLAUSE] [DELIMITER] [REMAINING])
+     */
+
+    //    @clause_return [DONE] {RETURN} ([CLAUSE] [,?] [REMAINING])
+    // -> @loop          [DONE             CLAUSE,]     [REMAINING]
+    (@clause_return  [$($done:tt)*]  $return_c:tt  ([$($clause:tt)+]  [$(,)?]  $remaining_s:tt)) => {
+        $crate::__parse_clauses!(@loop  [$($done)* $($clause)+, ]  $remaining_s  $return_c)
+    };
+}
+
+/*
+ * | Input    | Returns
+ * |----------|----------
+ * | [TOKENS] | [CLAUSE] [DELIMITER] [REMAINING]
+ *
+ * [DELIMITER] should only be [] or [,].
+ */
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __parse_clause {
+    //    [TOKENS] {RETURN}
+    // -> @expr_return {RETURN} (...)
+    ([$($tokens:tt)+]  $return_c:tt) => {
+        $crate::__parse_expr!(
+            [$($tokens)+]
+            { $crate::__parse_clause!(@expr_return  $return_c) }
+        )
+    };
+
+    /*
+     * @expr_return {RETURN} (...)
+     */
+
+    // Binary operation. WITH associated type predicate.
+    //    @expr_return {RETURN} (binop [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME] [=] [TOKENS])
+    // -> @binop_assoc_type_return [LEFT] [TRAIT] [RIGHT] ASSOC-TYPE-NAME {RETURN} ([ASSOC] [DELIMITER] [REMAINING])
+    (@expr_return  $return_c:tt  (binop  $left_s:tt  $trait_s:tt  $right_s:tt  [$assoc_type_name:ident]  [=]  $tokens_s:tt)) => {
+        $crate::__parse_type!(
+            $tokens_s
+            { $crate::__parse_clause!(@binop_assoc_type_return  $left_s  $trait_s  $right_s  $assoc_type_name  $return_c) }
+        )
+    };
+
+    // Binary operation. WITHOUT associated type predicate. Right operand IS `Self`.
+    //         @expr_return {RETURN} (binop [LEFT] [TRAIT] [] [ASSOC-TYPE-NAME?] [DELIMITER] [REMAINING])
+    // Return: [LEFT : TRAIT] [DELIMITER] [REMAINING]
+    (@expr_return  $return_c:tt  (binop  [$($left:tt)+]  [$($trait:tt)+]  [/*RIGHT*/]  $assoc_type_name_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($left)* : $($trait)*]  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+    // Binary operation. WITHOUT associated type predicate. Right operand is NOT `Self`.
+    //         @expr_return {RETURN} (binop [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME?] [DELIMITER] [REMAINING])
+    // Return: [LEFT : TRAIT < RIGHT >] [DELIMITER] [REMAINING]
+    (@expr_return  $return_c:tt  (binop  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  $assoc_type_name_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($left)* : $($trait)* < $($right)+ >]  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+    //    @expr_return      {RETURN} (type [TYPE] [:] [TOKENS])
+    // -> @raw_bound_return {RETURN}       [TYPE] ([BOUND] [DELIMITER] [REMAINING])
+    (@expr_return  $return_c:tt  (type  $type_s:tt  [:]  $tokens_s:tt)) => {
+        $crate::__parse_raw_bound!(
+            $tokens_s
+            { $crate::__parse_clause!(@raw_bound_return  $return_c  $type_s) }
+        )
+    };
+
+    /*
+     * @binop_assoc_type_return [LEFT] [TRAIT] [RIGHT] ASSOC-TYPE-NAME {RETURN} ([ASSOC] [DELIMITER] [REMAINING])
+     */
+
+    // Binary operation. WITH associated type predicate. Right operand IS `Self`.
+    //         @binop_assoc_type_return [LEFT] [TRAIT] [] ASSOC-TYPE-NAME {RETURN} ([ASSOC]   [DELIMITER] [REMAINING])
+    // Return:                          [LEFT : TRAIT   < ASSOC-TYPE-NAME =          ASSOC >] [DELIMITER] [REMAINING]
+    (@binop_assoc_type_return  [$($left:tt)+]  [$($trait:tt)+]  [/*RIGHT*/]  $assoc_type_name:ident  $return_c:tt  ([$($assoc:tt)+]  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($left)* : $($trait)* < $assoc_type_name = $($assoc)+ > ]  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+    // Binary operation. WITH associated type predicate. Right operand is NOT `Self`.
+    //         @binop_assoc_type_return [LEFT] [TRAIT] [RIGHT] ASSOC-TYPE-NAME {RETURN} ([ASSOC]   [DELIMITER] [REMAINING])
+    // Return:                          [LEFT : TRAIT < RIGHT, ASSOC-TYPE-NAME =          ASSOC >] [DELIMITER] [REMAINING]
+    (@binop_assoc_type_return  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  $assoc_type_name:ident  $return_c:tt  ([$($assoc:tt)+]  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($left)* : $($trait)* < $($right)+, $assoc_type_name = $($assoc)+ > ]  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+
+    /*
+     * @raw_bound_return {RETURN} [TYPE] ([BOUND] [DELIMITER] [REMAINING])
+     */
+
+    //         @raw_bound_return {RETURN} [TYPE] ([BOUND] [DELIMITER] [REMAINING])
+    // Return:                            [TYPE :  BOUND] [DELIMITER] [REMAINING]
+    (@raw_bound_return  $return_c:tt  [$($type:tt)+]  ([$($bound:tt)+]  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($type)+ : $($bound)+]  $delimiter_s  $remaining_s)  $return_c)
+    };
+}
+
+/*
+ * | Input              | Generates
+ * |--------------------|--------------------
+ * | [UNOP OPERAND]     | '<' type(OPERAND) 'as' trait(UNOP) '>::' assoc-type-name(UNOP)
+ * | [LEFT BINOP '_']   | '<' type(LEFT) 'as' trait(BINOP)                  '>::' assoc-type-name(BINOP)
+ * | [LEFT BINOP RIGHT] | '<' type(LEFT) 'as' trait(BINOP) '<' type(RIGHT) '>>::' assoc-type-name(BINOP)
+ * | [LEFT]             | type(LEFT)
+ */
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __parse_operation {
-    ($pending_s:tt) => {
-        // Parses the left side.
-        $crate::__parse_type!(
-            []  $pending_s
-            { $crate::__parse_operation!(@op) }
+    //    [TOKENS]
+    // -> @expr_return (...)
+    ([$($tokens:tt)+]) => {
+        $crate::__parse_expr!(
+            [$($tokens)+]
+            { $crate::__parse_operation!(@expr_return) }
         )
     };
 
     /*
-     * @op ([LEFT] [PENDING])
-     */
-
-    // No operator or right side.
-    (@op ([$($left:tt)+] [])) => {
-        $($left)+
-    };
-
-    // There is an operator and a right side.
-    (@op ($left_s:tt  [$op:tt  $($pending:tt)+])) => {
-        $crate::__op_info!(
-            $op
-            { $crate::__parse_operation!(@right $left_s [$($pending)+]) }
-        )
-    };
-
-    /*
-     * @right [LEFT] [PENDING] ([TRAIT] ASSOC-TYPE-NAME))
-     */
-
-    // The right side IS '_'.
-    (@right  $left_s:tt  [_] ($trait_s:tt  $assoc_type_name:ident)) => {
-        $crate::__parse_operation!(@end  $left_s  $trait_s  [/*RIGHT*/]  $assoc_type_name)
-    };
-
-    (@right  $left_s:tt  $pending_s:tt ($trait_s:tt  $assoc_type_name:ident)) => {
-        $crate::__parse_type!(
-            []  $pending_s
-            { $crate::__parse_operation!(@right_type_return  $left_s  $trait_s  $assoc_type_name) }
-        )
-    };
-
-    /*
-     * @right_type_return [LEFT] [TRAIT] ASSOC-TYPE-NAME ([RIGHT] [PENDING])
-     */
-    (@right_type_return  $left_s:tt  $trait_s:tt  $assoc_type_name:ident  ($right_s:tt  [/*PENDING*/])) => {
-        $crate::__parse_operation!(@end  $left_s  $trait_s  $right_s  $assoc_type_name)
-    };
-
-    /*
-     * @end [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME]
+     * @expr_return (...)
      */
 
     // Right operand IS `Self`.
-    (@end  [$($left:tt)+]  [$($trait:tt)+]  []  $assoc_type_name:ident) => {
-        < $($left)+ as $($trait)+ >:: $assoc_type_name
+    //           @expr_return (binop [LEFT] [TRAIT] [] [ASSOC-TYPE-NAME] [] [])
+    // Generate: < LEFT as TRAIT > :: ASSOC-TYPE-NAME
+    (@expr_return (binop  [$($left:tt)+]  [$($trait:tt)+]  [/*RIGHT*/]  [$assoc_type_name:ident]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
+        < $($left)+ as $($trait)+ > :: $assoc_type_name
     };
 
     // Right operand is NOT `Self`.
-    (@end  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  $assoc_type_name:ident) => {
-        < $($left)+ as $($trait)+ < $($right)+ > >:: $assoc_type_name
+    //           @expr_return (binop [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME] [] [])
+    // Generate: < LEFT as TRAIT < RIGHT > > :: ASSOC-TYPE-NAME
+    (@expr_return (binop  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  [$assoc_type_name:ident]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
+        < $($left)+ as $($trait)+ < $($right)+ > > :: $assoc_type_name
+    };
+
+    //           @expr_return (type [TYPE] [] [])
+    // Generate:                     TYPE
+    (@expr_return (type  [$($type:tt)+]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
+        $($type)+
+    };
+
+    // ?
+    (@expr_return ($($tt:tt)*)) => {
+        compile_error!("TODO")
     };
 }
 
+/*
+ * | Input                   | Returns
+ * |-------------------------|-------------------------
+ * | [UNOP OPERAND REST]     | unop trait(UNOP) assoc-type-name(UNOP) [type(OPERAND)] [OP-DELIMITER] [REMAINING]
+ * | [LEFT BINOP RIGHT REST] | binop [type(LEFT)] [TRAIT] [type(RIGHT)] [ASSOC-TYPE-NAME?] [OP-DELIMITER] [REMAINING]
+ * | [TYPE REST]             | type [type(TYPE)] [TYPE-DELIMITER] [REMAINING]
+ *
+ * [OP-DELIMITER] can be:
+ *     []
+ *     [=]
+ *     [,]
+ *
+ * [TYPE-DELIMITER] is:
+ *     []
+ *     [:]
+ *     [=]
+ *     [,]
+ */
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __parse_expr {
+    // TODO: unary operation.
+
+    //                      [TOKENS] {RETURN}
+    // -> @left_type_return {RETURN} ([TYPE] [DELIMITER] [REMAINING])
+    ([ $($tokens:tt)* ]  $return_c:tt) => {
+        $crate::__parse_type!(
+            [$($tokens)*]
+            { $crate::__parse_expr!(@left_type_return  $return_c) }
+        )
+    };
+
+    /*
+     * @left_type_return {RETURN} ([TYPE] [DELIMITER] [TOKENS])
+     */
+
+    //         @left_type_return {RETURN} ([TYPE] [] [])
+    // Return: type                        [TYPE] [] []
+    (@left_type_return  $return_c:tt  ($type_s:tt  [/*DELIMITER*/]  [/*TOKENS*/])) => {
+        $crate::__return!((type  $type_s  [/*DELIMITER*/]  [/*REMAININGS*/])  $return_c)
+    };
+
+    //         @left_type_return {RETURN} ([TYPE] [:] [TOKENS])
+    // Return: type                        [TYPE] [:] [TOKENS]
+    (@left_type_return  $return_c:tt  ($type_s:tt  [:]  $tokens_s:tt)) => {
+        $crate::__return!((type  $type_s  [:]  $tokens_s)  $return_c)
+    };
+
+    //    @left_type_return {RETURN} ([LEFT] [[TRAIT]  ASSOC-TYPE-NAME?] [TOKENS])
+    // -> @right                      [LEFT]  [TRAIT] [ASSOC-TYPE-NAME?] [TOKENS] {RETURN}
+    (@left_type_return  $return_c:tt  ($left_s:tt  [[$($trait:tt)+]  $($assoc_type_name:ident)?]  $tokens_s:tt)) => {
+        $crate::__parse_expr!(@right  $left_s  [$($trait)+]  [$($assoc_type_name)?]  $tokens_s  $return_c)
+    };
+
+    // ?
+    (@left_type_return  $return_c:tt  ($type_s:tt  $delimiter_s:tt  $tokens_s:tt)) => {
+        compile_error!("TODO")
+    };
+
+    /*
+     * @right [LEFT] [TRAIT] [ASSOC-TYPE-NAME?] [TOKENS] {RETURN}
+     */
+
+    // Right side IS '_'.
+    //    @right            [LEFT] [TRAIT] [ASSOC-TYPE-NAME?] [_ TOKENS] {RETURN}
+    // -> @delimiter_return [LEFT] [TRAIT] [ASSOC-TYPE-NAME?]            {RETURN} ([DELIMITER] [REMAINING])
+    (@right  $left_s:tt  $trait_s:tt  $assoc_type_name_s:tt  [_ $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__parse_delimiter!(
+            [$($tokens)*]
+            { $crate::__parse_expr!(@delimiter_return  $left_s  $trait_s  $assoc_type_name_s  $return_c) }
+        )
+    };
+
+    // Right side is NOT '_'.
+    //    @right             [LEFT] [TRAIT] [ASSOC-TYPE-NAME?] [TOKENS] {RETURN}
+    // -> @right_type_return [LEFT] [TRAIT] [ASSOC-TYPE-NAME?]          {RETURN} ([RIGHT] [DELIMITER] [REMAINING])
+    (@right  $left_s:tt  $trait_s:tt  $assoc_type_name_s:tt  $tokens_s:tt  $return_c:tt) => {
+        $crate::__parse_type!(
+            $tokens_s
+            { $crate::__parse_expr!(@right_type_return  $left_s  $trait_s  $assoc_type_name_s  $return_c) }
+        )
+    };
+
+    /*
+     * @delimiter_return [LEFT] [TRAIT] [ASSOC-TYPE-NAME?] {RETURN} ([DELIMITER] [REMAINING])
+     */
+
+    //         @delimiter_return [LEFT] [TRAIT]    [ASSOC-TYPE-NAME?] {RETURN} ([DELIMITER] [REMAINING])
+    // Return: binop             [LEFT] [TRAIT] [] [ASSOC-TYPE-NAME?]           [DELIMITER] [REMAINING]
+    (@delimiter_return  $left_s:tt  $trait_s:tt  $assoc_type_name_s:tt  $return_c:tt  ($delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!((binop  $left_s  $trait_s  [/*RIGHT*/]  $assoc_type_name_s  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+    /*
+     * @right_type_return [LEFT] [TRAIT] [ASSOC-TYPE-NAME?] {RETURN} ([RIGHT] [DELIMITER] [REMAINING])
+     */
+
+    //         @right_type_return [LEFT] [TRAIT]         [ASSOC-TYPE-NAME?] {RETURN} ([RIGHT] [DELIMITER] [REMAINING])
+    // Return: binop              [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME?]                   [DELIMITER] [REMAINING]
+    (@right_type_return $left_s:tt  $trait_s:tt  $assoc_type_name_s:tt  $return_c:tt  ($right_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!((binop  $left_s  $trait_s  $right_s  $assoc_type_name_s  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+    // ?
+    (@right_type_return $left_s:tt  $trait_s:tt  $assoc_type_name_s:tt  $return_c:tt  ($right_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
+        compile_error!("TODO")
+    };
+}
+
+/*
+ * | Input              | Returns
+ * |--------------------|--------------------
+ * | [(OPERATION) REST] | [type(OPERATION)] [DELIMITER] [REMAINING]
+ * | [RAW-TYPE REST]    | [RAW-TYPE] [DELIMITER] [REMAINING]
+ *
+ * [DELIMITER] can be the same ones as returned by __parse_delimiter.
+ */
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __parse_type {
+    //                            [(TOKENS) REST] {RETURN}
+    // -> @delimiter_return [parse([TOKENS])]     {RETURN} ([DELIMITER] [REMAINING])
+    ([ ( $($tokens:tt)+ ) $($rest:tt)*]  $return_c:tt) => {
+        $crate::__parse_delimiter!(
+            [$($rest)*]
+            { $crate::__parse_type!(@delimiter_return [$crate::__parse_operation!([$($tokens)+])]  $return_c) }
+        )
+    };
+
+    //          [TOKENS] {RETURN}
+    // -> @loop [TOKENS] {RETURN}
+    ([$($tokens:tt)+]  $return_c:tt) => {
+        $crate::__parse_type!(@loop [] [$($tokens)+]  $return_c)
+    };
+
     /*
-     * [PARSED-TYPE] [PENDING-TOKENS] {RETURN}
-     * Returns [PARSED-TYPE] [REMAINING-TOKENS]
+     * @delimiter_return [TYPE] {RETURN} ([DELIMITER] [REMAINING])
      */
 
-    // TODO: remove initial [] ?
-    ([] $pending_s:tt  $return_c:tt) => {
-        // Tries to parse as a PATH-LIKE.
-        $crate::__parse_path_like!(
-            []  $pending_s
-            { $crate::__parse_type!(@path_like_return  $return_c) }
+    //         @delimiter_return [TYPE] {RETURN} ([DELIMITER] [REMAINING])
+    // Return:                   [TYPE]           [DELIMITER] [REMAINING]
+    (@delimiter_return  $type_s:tt  $return_c:tt  ($delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(($type_s  $delimiter_s  $remaining_s)  $return_c)
+    };
+
+    /*
+     * @loop [DONE] [PENDING] {RETURN}
+     */
+
+    //    @loop [DONE] [< ... >    TOKENS] {RETURN}
+    // -> @loop [DONE   < ... >] [ TOKENS] {RETURN}
+    (@loop  $done_s:tt  [< $($tokens:tt)+]  $return_c:tt) => {
+        $crate::__parse_angle_brackets_content!(
+            [$($tokens)+]
+            { $crate::__parse_type!(@angle_return  $done_s  $return_c) }
+        )
+    };
+
+    //    @loop [DONE] [<< ... > INSIDE >   TOKENS] {RETURN}
+    // -> @loop [DONE   << ... > INSIDE >] [TOKENS] {RETURN}
+    (@loop  $done_s:tt  [<< $($tokens:tt)+]  $return_c:tt) => {
+        compile_error!("TODO")
+    };
+
+    //    @loop        [DONE] [TOKENS] {RETURN}
+    // -> @loop_return [DONE]          {RETURN} (DELIMITER [REMAINING])
+    (@loop  $done_s:tt  $tokens_s:tt  $return_c:tt) => {
+        $crate::__parse_delimiter!(
+            $tokens_s
+            { $crate::__parse_type!(@loop_return  $done_s  $return_c) }
         )
     };
 
     /*
-     * @path_like_return {RETURN} ([TYPE] [PENDING])
+     * @angle_return [DONE] {RETURN} ([CONTENT] [REMAINING])
      */
 
-    // The type is NOT a PATH-LIKE.
-    (@path_like_return  $return_c:tt  ( [/*TYPE*/] [ ( $($operation:tt)+ ) $($pending:tt)* ] )) => {
-        $crate::__return!(
-            ([$crate::__parse_operation!( [$($operation)+] )] [$($pending)*])
-            $return_c
-        )
+    //    @angle_return [DONE] {RETURN} ([CONTENT]   [REMAINING])
+    // -> @loop         [DONE           < CONTENT >] [REMAINING] {RETURN}
+    (@angle_return  [$($done:tt)*]  $return_c:tt  ([$($content:tt)*]  $remaining_s:tt)) => {
+        $crate::__parse_type!(@loop [$($done)* < $($content)* >]  $remaining_s  $return_c)
     };
 
-    // The path IS a PATH-LIKE.
-    (@path_like_return  $return_c:tt ( $path_s:tt  $pending_s:tt )) => {
-        $crate::__return!(($path_s  $pending_s)  $return_c)
+    /*
+     * @loop_return [DONE] {RETURN} (DELIMITER [REMAINING])
+     */
+
+    //    @loop_return [DONE]              {RETURN} (_not_ [TOKEN REST])
+    // -> @loop        [DONE TOKEN] [REST] {RETURN}
+    (@loop_return  [$($done:tt)*]  $return_c:tt  (_not_  [$tok:tt  $($rest:tt)*])) => {
+        $crate::__parse_type!(@loop  [$($done)*  $tok]  [$($rest)*]  $return_c)
+    };
+
+    //         @loop_return [DONE] {RETURN} ([DELIMITER] [REMAINING])
+    // Return:              [DONE]           [DELIMITER] [REMAINING]
+    (@loop_return  $done_s:tt  $return_c:tt  ($delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(($done_s  $delimiter_s  $remaining_s) $return_c)
     };
 }
 
+/*
+ * This macro is intended to be used when a type is parsed without reaching the delimiter after
+ * it, such as when:
+ *     - '_' is parsed as RIGHT
+ *     - '(' OPERATION ')' is parsed as TYPE
+ *
+ * | Input        | Returns
+ * |--------------|--------------
+ * | [TOKENS]     | [DELIMITER] [REMAINING]    /* general case */
+ * | []           | [] []
+ * | [: REST]     | [:] [REST]
+ * | [= REST]     | [=] [REST]
+ * | [, REST]     | [,] [REST]
+ * | [BINOP REST] | [trait(BINOP) assoc-type-name(BINOP)?] [REST]
+ * | [TOKEN REST] | _not_ [TOKEN REST]         /* the next token is not a delimiter */
+ */
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __parse_path_like {
-    /*
-     * [PARSED-PATH] [PENDING-TOKENS] {RETURN}
-     * Returns [PARSED-PATH] [REMAINING-TOKENS]
-     */
-
-    //    [] [IDENTIFIER < ... >   PENDING] {RETURN}
-    // -> [   IDENTIFIER < ... >] [PENDING] {RETURN}
-    ([/*PATH*/] [ $ident:ident < $($pending:tt)+ ] $return_c:tt) => {
-        compile_error!("Not implemented")
+macro_rules! __parse_delimiter {
+    // No more tokens.
+    //         [] {RETURN}
+    // Return: [] []
+    ([/*TOKENS*/]  $return_c:tt) => {
+        $crate::__return!(([/*DELIMITER*/] [/*REMAINING*/]) $return_c)
     };
 
-    //    [] [IDENTIFIER   PENDING] {RETURN}
-    // -> [   IDENTIFIER] [PENDING] {RETURN}
-    ([/*PATH*/] [ $ident:ident $($pending:tt)* ] $return_c:tt) => {
-        $crate::__parse_path_like!(
-            [$ident] [$($pending)*]
-            $return_c
-        )
+    //         [:   TOKENS] {RETURN}
+    // Return: [:] [TOKENS]
+    ([:  $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__return!(([:]  [$($tokens)*])  $return_c)
     };
 
-    //    [] [< ... >   PENDING] {RETURN}
-    // -> [   < ... >] [PENDING] {RETURN}
-    ([/*PATH*/] [ < $($pending:tt)+ ] $return_c:tt) => {
-        $crate::__parse_angle_brackets_content!(
-            [] [$($pending)+]
-            { $crate::__parse_path_like!(@angle_return $return_c) }
-        )
+    //         [=   TOKENS] {RETURN}
+    // Return: [=] [TOKENS]
+    ([=  $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__return!(([=]  [$($tokens)*])  $return_c)
     };
 
-    //        [] [PENDING] {RETURN}
-    // return [] [PENDING]
-    ([/*PATH*/] $pending_s:tt $return_c:tt) => {
-        $crate::__return!(
-            ([] $pending_s)
-            $return_c
-        )
+    //         [,   TOKENS] {RETURN}
+    // Return: [,] [TOKENS]
+    ([,  $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__return!(([,]  [$($tokens)*])  $return_c)
     };
 
-    //    [PATH] [:: IDENTIFIER < ... >   PENDING] {RETURN}
-    // -> [PATH   :: IDENTIFIER < ... >] [PENDING] {RETURN}
-    ([ $($path:tt)+ ] [ :: $ident:ident < $($pending:tt)+ ] $return_c:tt) => {
-        compile_error!("Not implemented")
-    };
-
-    //    [PATH] [:: IDENTIFIER   PENDING] {RETURN}
-    // -> [PATH   :: IDENTIFIER] [PENDING] {RETURN}
-    ([ $($path:tt)+ ] [ :: $ident:ident $($pending:tt)* ] $return_c:tt) => {
-        $crate::__parse_path_like!([$($path)+ ::  $ident]  [$($pending)*]  $return_c)
-    };
-
-    //    [PATH] [:: < ... >   PENDING] {RETURN}
-    // -> [PATH   :: < ... >] [PENDING] {RETURN}
-    ([ $($path:tt)+ ] [ :: < $($pending:tt)+ ] $return_c:tt) => {
-        compile_error!("Not implemented")
-    };
-
-    //        [PATH] [PENDING] {RETURN}
-    // return [PATH] [PENDING]
-    ($path_s:tt  $pending_s:tt  $return_c:tt) => {
-        $crate::__return!(
-            ( $path_s  $pending_s )
-            $return_c
+    //                    [TOKEN  TOKENS] {RETURN}
+    // -> @op_info_return  TOKEN [TOKENS] {RETURN} (...)
+    ([$tok:tt  $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__op_info!(
+            $tok
+            { $crate::__parse_delimiter!(@op_info_return  $tok  [$($tokens)*]  $return_c) }
         )
     };
 
     /*
-     * @angle_return {RETURN} ([CONTENT] [PENDING])
+     * @op_info_return TOKEN [TOKENS] {RETURN} (...)
      */
 
-    //                             {RETURN} ([CONTENT] [PENDING])
-    // ->  [< CONTENT >] [PENDING] {RETURN}
-    (@angle_return $return_c:tt ([$($content:tt)*] $pending_s:tt)) => {
-        $crate::__parse_path_like!([< $($content)* >]  $pending_s  $return_c)
+    // The token is not recognized.
+    //         @op_info_return TOKEN [TOKENS] {RETURN} ()
+    // Return: not            [TOKEN  TOKENS]
+    (@op_info_return  $tok:tt  [$($tokens:tt)*]  $return_c:tt  ()) => {
+        $crate::__return!((_not_  [$tok  $($tokens)*])  $return_c)
+    };
+
+    // The token is BINOP.
+    //         @op_info_return BINOP      [TOKENS] {RETURN} ([TRAIT] ASSOC-TYPE-NAME?)
+    // Return: [[TRAIT] ASSOC-TYPE-NAME?] [TOKENS]
+    (@op_info_return  $tok:tt  $tokens_s:tt  $return_c:tt  ($trait_s:tt  $($assoc_type_name:ident)?)) => {
+        $crate::__return!(([$trait_s  $($assoc_type_name)?]  $tokens_s)  $return_c)
     };
 }
+
+/*
+ * | Input | Returns
+ * |-------|-------
+ * | OP    | [TRAIT] ASSOC-TYPE-NAME?
+ * | OP    | NOTHING
+ */
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __op_info {
-    /*
-     * OP {RETURN}
-     * Returns (TRAIT ASSOC-TYPE?)
-     */
-
     (+ $return_c:tt) => {
         $crate::__return!(([::core::ops::Add] Output) $return_c)
     };
@@ -527,119 +626,143 @@ macro_rules! __op_info {
     (* $return_c:tt) => {
         $crate::__return!(([::core::ops::Mul] Output) $return_c)
     };
+
+    // Unrecognized operator.
+    ($op:tt $return_c:tt) => {
+        $crate::__return!(() $return_c)
+    };
 }
 
-// Parses anything until the end or until a comma that is not inside braces.
+/*
+ * Parses anything until the end or until a comma that is not inside braces.
+ * | Input    | Returns
+ * |----------|----------
+ * | [TOKENS] | [BOUND] [DELIMITER] [REMAINING]
+ *
+ * [DELIMITER] is [] or [,].
+ */
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __parse_thing {
-    /*
-     * [PARSED-THING] [PENDING-TOKENS] {RETURN}
-     * Returns [PARSED-THING] [REMAINING-TOKENS]
-     */
-
-    //        [PARSED] [, PENDING] {RETURN}
-    // return [PARSED] [, PENDING]
-    ([$($parsed:tt)*] [, $($pending:tt)*]  $return_c:tt) => {
-        $crate::__return!(([$($parsed)*] [, $($pending)*]) $return_c)
+macro_rules! __parse_raw_bound {
+    ([$($tokens:tt)+]  $return_c:tt) => {
+        $crate::__parse_raw_bound!(@loop  []  [$($tokens)+]  $return_c)
     };
 
-    //    [PARSED] [< ... >   PENDING] {RETURN}
-    // -> [PARSED   < ... >] [PENDING] {RETURN}
-    ($parsed_s:tt  [< $($pending:tt)+]  $return_c:tt) => {
+    /*
+     * @loop [DONE] [TOKENS] {RETURN}
+     */
+
+    // ?
+    (@loop  $done_s:tt  [/*TOKENS*/]  $return_c:tt) => {
+        compile_error!("TODO")
+    };
+
+    //    @loop [DONE] [< ... >   TOKENS] {RETURN}
+    // -> @loop [DONE   < ... >] [TOKENS] {RETURN}
+    (@loop  $done_s:tt  [< $($tokens:tt)+]  $return_c:tt) => {
         $crate::__parse_angle_brackets_content!(
-            [] [$($pending)+]
-            { $crate::__parse_thing!(@angle_return  $parsed_s  $return_c) }
+            [$($tokens)+]
+            { $crate::__parse_raw_bound!(@angle_return  $done_s  $return_c) }
         )
     };
 
-    //    [PARSED] [TOKEN   PENDING] {RETURN}
-    // -> [PARSED   TOKEN] [PENDING] {RETURN}
-    ([$($parsed:tt)*] [$tok:tt  $($pending:tt)*]  $return_c:tt) => {
-        $crate::__parse_thing!([$($parsed)*  $tok] [$($pending)*] $return_c)
+    // ?
+    (@loop  $done_s:tt  [<< $($tokens:tt)+]  $return_c:tt) => {
+        compile_error!("TODO")
     };
 
-    //        [PARSED] [] {RETURN}
-    // return [PARSED] []
-    ($parsed_s:tt [/*PARSED*/] $return_c:tt) => {
-        compile_error!("Not implemented")
+    //         @loop [DONE] [,   TOKENS] {RETURN}
+    // Return:       [DONE] [,] [TOKENS]
+    (@loop  $done_s:tt  [, $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__return!(($done_s  [,]  [$($tokens)*])  $return_c)
+    };
+
+    //    @loop [DONE] [TOKEN   TOKENS] {RETURN}
+    // -> @loop [DONE   TOKEN] [TOKENS] {RETURN}
+    (@loop  [$($done:tt)*]  [$tok:tt $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__parse_raw_bound!(@loop  [$($done)*  $tok]  [$($tokens)*]  $return_c)
     };
 
     /*
-     * @angle_return [PARSED] {RETURN} ([CONTENT] [PENDING])
+     * @angle_return [DONE] {RETURN} ([CONTENT] [REMAINING])
      */
-    (@angle_return  [$($parsed:tt)*]  $return_c:tt  ([$($content:tt)*]  $pending_s:tt)) => {
-        $crate::__parse_thing!([$($parsed)* < $($content)* >]  $pending_s  $return_c)
+
+    //    @angle_return [DONE] {RETURN} ([CONTENT]   [REMAINING])
+    // -> @loop         [DONE           < CONTENT >] [REMAINING] {RETURN}
+    (@angle_return [$($done:tt)*]  $return_c:tt  ([$($content:tt)*]  $remaining_s:tt)) => {
+        $crate::__parse_raw_bound!(@loop  [$($done)* < $($content)* >]  $remaining_s  $return_c)
     };
 }
 
+/*
+ * The opening angle bracket ('<') must already have being consumed.
+ *
+ * | Input           | Returns
+ * |-----------------|-----------------
+ * | [TOKENS > REST] | [TOKENS] [REST]
+ */
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __parse_angle_brackets_content {
+    ([$($tokens:tt)+]  $return_c:tt) => {
+        $crate::__parse_angle_brackets_content!(@loop [] [$($tokens)+]  $return_c)
+    };
+
     /*
-     * [PARSED] [TOKENS > AFTER] {RETURN}
-     * Returns [PARSED TOKENS] [AFTER]
-     * The opening '<' must already have being consumed.
+     * @loop [DONE] [TOKENS] {RETURN}
      */
 
-    //        [PARSED] [>> PENDING] {RETURN}
-    // return [PARSED]  [> PENDING]
-    // ('>>' is parsed as a single token)
-    // (One closing '>' is discarded)
-    ($parsed_s:tt [>> $($pending:tt)*] $return_c:tt) => {
-        $crate::__return!(
-            ($parsed_s  [> $($pending)*])
-            $return_c
-        )
+    //         @loop [DONE] [> TOKENS] {RETURN}
+    // Return:       [DONE]   [TOKENS]
+    (@loop  $done_s:tt  [> $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__return!(($done_s  [$($tokens)*])  $return_c)
     };
 
-    //        [PARSED] [> PENDING] {RETURN}
-    // return [PARSED]   [PENDING]
-    // (The closing '>' is discarded)
-    ($parsed_s:tt [> $($pending:tt)*] $return_c:tt) => {
-        $crate::__return!(($parsed_s  [$($pending)*])  $return_c)
+    //    @loop [DONE]  [>> TOKENS] {RETURN}
+    // -> @loop [DONE] [> > TOKENS] {RETURN}
+    (@loop  $done_s:tt  [>> $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__parse_angle_brackets_content!(@loop  $done_s  [> > $($tokens)*]  $return_c)
     };
 
-    // ('<<' is parsed as a single token)
-    ([$($parsed:tt)*] [<< $($pending:tt)*] $return_c:tt) => {
-        compile_error!("Not implemented")
-    };
-
-    //    [PARSED] [< ... >   PENDING] {RETURN}
-    // -> [PARSED   < ... >] [PENDING] {RETURN}
-    ($parsed_s:tt [< $($pending:tt)*] $return_c:tt) => {
+    //    @loop [DONE] [< ... >   TOKENS] {RETURN}
+    // -> @loop [DONE   < ... >] [TOKENS] {RETURN}
+    (@loop  $done_s:tt  [< $($tokens:tt)+]  $return_c:tt) => {
         // "Recursive" call.
         $crate::__parse_angle_brackets_content!(
-            [] [$($pending)*]
-            { $crate::__parse_angle_brackets_content!(@angle_return  $parsed_s  $return_c) }
+            [$($tokens)+]
+            { $crate::__parse_angle_brackets_content!(@angle_return  $done_s  $return_c) }
         )
     };
 
-    //    [PARSED] [TOKEN    PENDING > AFTER] {RETURN}
-    // -> [PARSED   TOKEN] [ PENDING > AFTER] {RETURN}
-    ([$($parsed:tt)*] [$tok:tt $($pending:tt)*] $return_c:tt) => {
-        $crate::__parse_angle_brackets_content!([$($parsed)*  $tok] [$($pending)*]  $return_c)
+    // ?
+    (@loop  $done_s:tt  [<< $($tokens:tt)+]  $return_c:tt) => {
+        compile_error!("TODO")
+    };
+
+    //    @loop [DONE] [TOKEN   TOKENS] {RETURN}
+    // -> @loop [DONE   TOKEN] [TOKENS] {RETURN}
+    (@loop  [$($done:tt)*]  [$tok:tt $($tokens:tt)+]  $return_c:tt) => {
+        $crate::__parse_angle_brackets_content!(@loop [$($done)*  $tok]  [$($tokens)+]  $return_c)
     };
 
     /*
-     * @angle_return [PARSED] {RETURN} ([CONTENT] [PENDING])
+     * @angle_return [DONE] {RETURN} ([CONTENT] [REMAINING])
      */
 
-    //    [PARSED]                       {RETURN} ([CONTENT] [PENDING])
-    // -> [PARSED < CONTENT >] [PENDING] {RETURN}
-    (@angle_return  [$($parsed:tt)*]  $return_c:tt  ([$($content:tt)*]  $pending_s:tt)) => {
+    //    @angle_return [DONE] {RETURN} ([CONTENT]   [REMAINING])
+    // -> @loop         [DONE           < CONTENT >] [REMAINING] {RETURN}
+    (@angle_return  [$($done:tt)*]  $return_c:tt  ([$($content:tt)*]  $remaining_s:tt)) => {
         // Returning from "recursive" call.
-        $crate::__parse_angle_brackets_content!([$($parsed)* < $($content)* >]  $pending_s  $return_c)
+        $crate::__parse_angle_brackets_content!(@loop [$($done)* < $($content)* >]  $remaining_s  $return_c)
     };
 }
 
+/*
+ * Input: (RESULT) {RETURN}
+ */
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __return {
-    /*
-     * (RESULT) {RETURN}
-     */
-
     // Callback
     (( $($result:tt)* ) { ( $($macro_pattern:tt)* ) $($macro_rest:tt)* }) => {
         macro_rules! __emit__ { ( $($macro_pattern)* ) $($macro_rest)* }

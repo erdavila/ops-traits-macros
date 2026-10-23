@@ -1,5 +1,7 @@
+#![recursion_limit = "256"]
+
 // Import with different names so that the macro doesn't make use of the imports.
-use std::ops::{Add as Add_, Mul as Mul_, Sub as Sub_};
+use std::ops::{Add as Add_, Mul as Mul_, Neg as Neg_, Sub as Sub_};
 
 use ops_traits_macros::with_ops_bounds;
 
@@ -34,7 +36,122 @@ fn empty() {
 }
 
 #[test]
-fn op_with_self() {
+fn unop() {
+    assert_ops_bounds!([
+        -T
+    ], [
+        T: ::core::ops::Neg,
+    ]);
+
+    with_ops_bounds!(
+        {
+            -T,
+        },
+        ($($bounds:tt)*) => {
+            fn neg<T>(x: T) -> <T as Neg_>::Output
+            where
+                $($bounds)*
+            {
+                -x
+            }
+        };
+    );
+
+    let result = neg(2);
+    assert_eq!(result, -2);
+}
+
+#[test]
+fn unop_with_output() {
+    assert_ops_bounds!([
+        -T = O
+    ], [
+        T: ::core::ops::Neg<Output = O>,
+    ]);
+
+    with_ops_bounds!(
+        {
+            -T = O,
+        },
+        ($($bounds:tt)*) => {
+            fn neg<T, O>(x: T) -> O
+            where
+                $($bounds)*
+            {
+                -x
+            }
+        };
+    );
+
+    let result = neg(2);
+    assert_eq!(result, -2);
+}
+
+#[test]
+fn unop_with_nested_unop() {
+    with_ops_bounds!(
+        {
+            -T,
+            -(-T),
+        },
+        ($($bounds:tt)*) => {
+            fn denegated<T>(x: T) -> <<T as Neg_>::Output as Neg_>::Output
+            where
+                $($bounds)*
+            {
+                -(-x)
+            }
+        };
+    );
+
+    let result = denegated(3);
+    assert_eq!(result, 3);
+}
+
+#[test]
+fn unop_with_nested_binop() {
+    with_ops_bounds!(
+        {
+            T * U,
+            -(T * U),
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U>(x: T, y: U) -> <<T as Mul_<U>>::Output as Neg_>::Output
+            where
+                $($bounds)*
+            {
+                -(x * y)
+            }
+        };
+    );
+
+    let result = calculate(2, 3);
+    assert_eq!(result, -6);
+}
+
+#[test]
+fn unop_with_nested_output() {
+    with_ops_bounds!(
+        {
+            T * U,
+            -(T * U) = (T * U),
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U>(x: T, y: U) -> <T as Mul_<U>>::Output
+            where
+                $($bounds)*
+            {
+                -(x * y)
+            }
+        };
+    );
+
+    let result = calculate(2, 3);
+    assert_eq!(result, -6);
+}
+
+#[test]
+fn binop_with_self() {
     assert_ops_bounds!([
         T * _
     ], [
@@ -61,7 +178,7 @@ fn op_with_self() {
 }
 
 #[test]
-fn op_with_other() {
+fn binop_with_other() {
     assert_ops_bounds!([
         T * U
     ], [
@@ -87,7 +204,7 @@ fn op_with_other() {
 }
 
 #[test]
-fn op_with_self_and_output() {
+fn binop_with_self_and_output() {
     assert_ops_bounds!([
         T * _ = O
     ], [
@@ -114,7 +231,7 @@ fn op_with_self_and_output() {
 }
 
 #[test]
-fn op_with_other_and_output() {
+fn binop_with_other_and_output() {
     assert_ops_bounds!([
         T * U = O
     ], [
@@ -197,7 +314,91 @@ fn multiple_clauses() {
 }
 
 #[test]
-fn nested_operation_at_left() {
+fn nested_unop_at_left() {
+    with_ops_bounds!(
+        {
+            -T,
+            (-T) * U,
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U>(x: T, y: U) -> <<T as Neg_>::Output as Mul_<U>>::Output
+            where
+                $($bounds)*
+            {
+                -x * y
+            }
+        };
+    );
+
+    let result = calculate(3, 4);
+    assert_eq!(result, -12);
+}
+
+#[test]
+fn nested_unop_at_right() {
+    with_ops_bounds!(
+        {
+            -U,
+            T * (-U),
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U>(x: T, y: U) -> <T as Mul_<<U as Neg_>::Output>>::Output
+            where
+                $($bounds)*
+            {
+                x * -y
+            }
+        };
+    );
+
+    let result = calculate(3, 4);
+    assert_eq!(result, -12);
+}
+
+#[test]
+fn nested_unop_at_left_with_output() {
+    with_ops_bounds!(
+        {
+            -T,
+            (-T) * U = O,
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U, O>(x: T, y: U) -> O
+            where
+                $($bounds)*
+            {
+                -x * y
+            }
+        };
+    );
+
+    let result = calculate(3, 4);
+    assert_eq!(result, -12);
+}
+
+#[test]
+fn nested_unop_at_right_with_output() {
+    with_ops_bounds!(
+        {
+            -U,
+            T * (-U) = O,
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U, O>(x: T, y: U) -> O
+            where
+                $($bounds)*
+            {
+                x * -y
+            }
+        };
+    );
+
+    let result = calculate(3, 4);
+    assert_eq!(result, -12);
+}
+
+#[test]
+fn nested_binop_at_left() {
     with_ops_bounds!(
         {
             T - U,
@@ -218,7 +419,28 @@ fn nested_operation_at_left() {
 }
 
 #[test]
-fn nested_operation_at_right() {
+fn nested_binop_at_left_with_output() {
+    with_ops_bounds!(
+        {
+            T - U,
+            (T - U) * V = O,
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U, V, O>(x: T, y: U, z: V) -> O
+            where
+                $($bounds)*
+            {
+                (x - y) * z
+            }
+        };
+    );
+
+    let result = calculate(5, 3, 4);
+    assert_eq!(result, 8);
+}
+
+#[test]
+fn nested_binop_at_right() {
     with_ops_bounds!(
         {
             U * V,
@@ -239,7 +461,7 @@ fn nested_operation_at_right() {
 }
 
 #[test]
-fn nested_operation_at_right_with_output() {
+fn nested_binop_at_right_with_output() {
     with_ops_bounds!(
         {
             U * V,
@@ -257,4 +479,25 @@ fn nested_operation_at_right_with_output() {
 
     let result = calculate(7, 3, 2);
     assert_eq!(result, 1);
+}
+
+#[test]
+fn binop_with_nested_output() {
+    with_ops_bounds!(
+        {
+            U * T,
+            T * U = (U * T),
+        },
+        ($($bounds:tt)*) => {
+            fn calculate<T, U>(x: T, y: U) -> <U as Mul_<T>>::Output
+            where
+                $($bounds)*
+            {
+                x * y
+            }
+        };
+    );
+
+    let result = calculate(3, 2);
+    assert_eq!(result, 6);
 }

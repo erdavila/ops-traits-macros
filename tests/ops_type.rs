@@ -1,5 +1,5 @@
 // Import with different names so that the macro doesn't make use of the imports.
-use std::ops::{Mul as Mul_, Sub as Sub_};
+use std::ops::{Mul as Mul_, Neg as Neg_, Sub as Sub_};
 
 mod same_type_eq {
     pub(crate) trait _TypeEq {}
@@ -34,7 +34,44 @@ macro_rules! assert_same_type {
 }
 
 #[test]
-fn op_with_self() {
+fn unop() {
+    assert_same_type!(
+        ops_type!(-T),
+        <T as Neg_>::Output,
+        { <T> where T: Neg_ }
+    );
+}
+
+#[test]
+fn unop_with_nested_unop() {
+    assert_same_type!(
+        ops_type!(-(-T)),
+        <<T as Neg_>::Output as Neg_>::Output,
+        {
+            <T>
+            where
+                T: Neg_,
+                <T as Neg_>::Output: Neg_,
+        }
+    );
+}
+
+#[test]
+fn unop_with_nested_binop() {
+    assert_same_type!(
+        ops_type!(-(T * U)),
+        <<T as Mul_<U>>::Output as Neg_>::Output,
+        {
+            <T, U>
+            where
+                T: Mul_<U>,
+                <T as Mul_<U>>::Output: Neg_,
+        }
+    );
+}
+
+#[test]
+fn binop_with_self() {
     assert_same_type!(
         ops_type!(T * _),
         <T as Mul_>::Output,
@@ -43,7 +80,7 @@ fn op_with_self() {
 }
 
 #[test]
-fn op_with_other() {
+fn binop_with_other() {
     assert_same_type!(
         ops_type!(T * U),
         <T as Mul_<U>>::Output
@@ -52,7 +89,35 @@ fn op_with_other() {
 }
 
 #[test]
-fn nested_operation_at_left() {
+fn nested_unop_at_left() {
+    assert_same_type!(
+        ops_type!((-T) * U),
+        <<T as Neg_>::Output as Mul_<U>>::Output
+        {
+            <T, U>
+            where
+                T: Neg_,
+                <T as Neg_>::Output: Mul_<U>,
+        }
+    );
+}
+
+#[test]
+fn nested_unop_at_right() {
+    assert_same_type!(
+        ops_type!(T * (-U)),
+        <T as Mul_<<U as Neg_>::Output>>::Output,
+        {
+            <T, U>
+            where
+                U: Neg_,
+                T: Mul_<<U as Neg_>::Output>,
+        }
+    );
+}
+
+#[test]
+fn nested_binop_at_left() {
     assert_same_type!(
         ops_type!((T - U) * V),
         <<T as Sub_<U>>::Output as Mul_<V>>::Output
@@ -66,7 +131,7 @@ fn nested_operation_at_left() {
 }
 
 #[test]
-fn nested_operation_at_right() {
+fn nested_binop_at_right() {
     assert_same_type!(
         ops_type!(T - (U * V)),
         <T as Sub_<<U as Mul_<V>>::Output>>::Output,

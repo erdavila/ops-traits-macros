@@ -220,6 +220,23 @@ macro_rules! __parse_clause {
      * @expr_return {RETURN} (...)
      */
 
+    // Unary operation. WITH associated type predicate.
+    //         @expr_return {RETURN} (unop [OPERAND] [TRAIT] [ASSOC-TYPE-NAME] [=] [TOKENS])
+    // -> @unop_assoc_type_return          [OPERAND] [TRAIT]  ASSOC-TYPE-NAME {RETURN} ([ASSOC] [DELIMITER] [REMAINING])
+    (@expr_return  $return_c:tt  (unop  $operand_s:tt  $trait_s:tt  [$assoc_type_name:ident]  [=]  $tokens_s:tt)) => {
+        $crate::__parse_type!(
+            $tokens_s
+            { $crate::__parse_clause!(@unop_assoc_type_return  $operand_s  $trait_s  $assoc_type_name  $return_c) }
+        )
+    };
+
+    // Unary operation. WITHOUT associated type predicate.
+    //         @expr_return {RETURN} (unop [OPERAND] [TRAIT] [ASSOC-TYPE-NAME?] [DELIMITER] [REMAINING])
+    // Return: [OPERAND : TRAIT] [DELIMITER] [REMAINING]
+    (@expr_return  $return_c:tt  (unop  [$($operand:tt)+]  [$($trait:tt)+]  $assoc_type_name_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($operand)+ : $($trait)+]  $delimiter_s  $remaining_s)  $return_c)
+    };
+
     // Binary operation. WITH associated type predicate.
     //    @expr_return {RETURN} (binop [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME] [=] [TOKENS])
     // -> @binop_assoc_type_return [LEFT] [TRAIT] [RIGHT] ASSOC-TYPE-NAME {RETURN} ([ASSOC] [DELIMITER] [REMAINING])
@@ -234,14 +251,14 @@ macro_rules! __parse_clause {
     //         @expr_return {RETURN} (binop [LEFT] [TRAIT] [] [ASSOC-TYPE-NAME?] [DELIMITER] [REMAINING])
     // Return: [LEFT : TRAIT] [DELIMITER] [REMAINING]
     (@expr_return  $return_c:tt  (binop  [$($left:tt)+]  [$($trait:tt)+]  [/*RIGHT*/]  $assoc_type_name_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
-        $crate::__return!(([$($left)* : $($trait)*]  $delimiter_s  $remaining_s)  $return_c)
+        $crate::__return!(([$($left)+ : $($trait)+]  $delimiter_s  $remaining_s)  $return_c)
     };
 
     // Binary operation. WITHOUT associated type predicate. Right operand is NOT `Self`.
     //         @expr_return {RETURN} (binop [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME?] [DELIMITER] [REMAINING])
     // Return: [LEFT : TRAIT < RIGHT >] [DELIMITER] [REMAINING]
     (@expr_return  $return_c:tt  (binop  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  $assoc_type_name_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
-        $crate::__return!(([$($left)* : $($trait)* < $($right)+ >]  $delimiter_s  $remaining_s)  $return_c)
+        $crate::__return!(([$($left)+ : $($trait)+ < $($right)+ >]  $delimiter_s  $remaining_s)  $return_c)
     };
 
     //    @expr_return      {RETURN} (type [TYPE] [:] [TOKENS])
@@ -251,6 +268,17 @@ macro_rules! __parse_clause {
             $tokens_s
             { $crate::__parse_clause!(@raw_bound_return  $return_c  $type_s) }
         )
+    };
+
+    /*
+     * @unop_assoc_type_return [OPERAND] [TRAIT] ASSOC-TYPE-NAME {RETURN} ([ASSOC] [DELIMITER] [REMAINING])
+     */
+
+    // Unary operation. WITH associated type predicate.
+    //         @unop_assoc_type_return [OPERAND] [TRAIT]  ASSOC-TYPE-NAME {RETURN} ([ASSOC]   [DELIMITER] [REMAINING])
+    // Return:                         [OPERAND : TRAIT < ASSOC-TYPE-NAME =          ASSOC >] [DELIMITER] [REMAINING]
+    (@unop_assoc_type_return  [$($operand:tt)+]  [$($trait:tt)+]  $assoc_type_name:ident  $return_c:tt  ([$($assoc:tt)+]  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!(([$($operand)+ : $($trait)+ < $assoc_type_name = $($assoc)+ >]  $delimiter_s  $remaining_s)  $return_c)
     };
 
     /*
@@ -307,20 +335,28 @@ macro_rules! __parse_operation {
      * @expr_return (...)
      */
 
-    // Right operand IS `Self`.
+    // Unary operation.
+    //           @expr_return (unop [OPERAND] [TRAIT] [ASSOC-TYPE-NAME] [] [])
+    // Generate: < OPERAND as TRAIT > :: ASSOC-TYPE-NAME
+    (@expr_return (unop  [$($operand:tt)+]  [$($trait:tt)+]  [$assoc_type_name:ident]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
+        < $($operand)+ as $($trait)+ > :: $assoc_type_name
+    };
+
+    // Binary operation. Right operand IS `Self`.
     //           @expr_return (binop [LEFT] [TRAIT] [] [ASSOC-TYPE-NAME] [] [])
     // Generate: < LEFT as TRAIT > :: ASSOC-TYPE-NAME
     (@expr_return (binop  [$($left:tt)+]  [$($trait:tt)+]  [/*RIGHT*/]  [$assoc_type_name:ident]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
         < $($left)+ as $($trait)+ > :: $assoc_type_name
     };
 
-    // Right operand is NOT `Self`.
+    // Binary operation. Right operand is NOT `Self`.
     //           @expr_return (binop [LEFT] [TRAIT] [RIGHT] [ASSOC-TYPE-NAME] [] [])
     // Generate: < LEFT as TRAIT < RIGHT > > :: ASSOC-TYPE-NAME
     (@expr_return (binop  [$($left:tt)+]  [$($trait:tt)+]  [$($right:tt)+]  [$assoc_type_name:ident]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
         < $($left)+ as $($trait)+ < $($right)+ > > :: $assoc_type_name
     };
 
+    // Just a type.
     //           @expr_return (type [TYPE] [] [])
     // Generate:                     TYPE
     (@expr_return (type  [$($type:tt)+]  [/*DELIMITER*/]  [/*REMAINING*/])) => {
@@ -336,7 +372,7 @@ macro_rules! __parse_operation {
 /*
  * | Input                   | Returns
  * |-------------------------|-------------------------
- * | [UNOP OPERAND REST]     | unop trait(UNOP) assoc-type-name(UNOP) [type(OPERAND)] [OP-DELIMITER] [REMAINING]
+ * | [UNOP OPERAND REST]     | unop [type(OPERAND)] [TRAIT] [ASSOC-TYPE-NAME?] [OP-DELIMITER] [REMAINING]
  * | [LEFT BINOP RIGHT REST] | binop [type(LEFT)] [TRAIT] [type(RIGHT)] [ASSOC-TYPE-NAME?] [OP-DELIMITER] [REMAINING]
  * | [TYPE REST]             | type [type(TYPE)] [TYPE-DELIMITER] [REMAINING]
  *
@@ -354,15 +390,47 @@ macro_rules! __parse_operation {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __parse_expr {
-    // TODO: unary operation.
+    //                [TOKEN TOKENS] {RETURN}
+    // -> @unop_info_return [TOKENS] {RETURN} (...)
+    ([$tok:tt  $($tokens:tt)*]  $return_c:tt) => {
+        $crate::__unop_info!(
+            $tok
+            { $crate::__parse_expr!(@unop_info_return  $tok  [$($tokens)*]  $return_c) }
+        )
+    };
 
-    //                      [TOKENS] {RETURN}
-    // -> @left_type_return {RETURN} ([TYPE] [DELIMITER] [REMAINING])
-    ([ $($tokens:tt)* ]  $return_c:tt) => {
+    /*
+     * @unop_info_return TOKEN [TOKENS] {RETURN} (...)
+     */
+
+    // The token was NOT an UNOP.
+    //    @unop_info_return TOKEN [TOKENS] {RETURN} ()
+    // -> @left_type_return                {RETURN} ([TYPE] [DELIMITER] [REMAINING])
+    (@unop_info_return  $tok:tt  [$($tokens:tt)+]  $return_c:tt  ())  => {
         $crate::__parse_type!(
-            [$($tokens)*]
+            [$tok  $($tokens)*]
             { $crate::__parse_expr!(@left_type_return  $return_c) }
         )
+    };
+
+    // The token WAS an UNOP.
+    //    @unop_info_return TOKEN [TOKENS] {RETURN} ([TRAIT]  ASSOC-TYPE-NAME?)
+    // -> @operand_type_return                       [TRAIT] [ASSOC-TYPE-NAME?] {RETURN} ([TYPE] [DELIMITER] [REMAINING])
+    (@unop_info_return  $tok:tt  $tokens_s:tt  $return_c:tt  ($trait_s:tt  $($assoc_type_name:ident)?))  => {
+        $crate::__parse_type!(
+            $tokens_s
+            { $crate::__parse_expr!(@operand_type_return  $trait_s  [$($assoc_type_name)?]  $return_c) }
+        )
+    };
+
+    /*
+     * @operand_type_return [TRAIT] [ASSOC-TYPE-NAME?] {RETURN} ([TYPE] [DELIMITER] [REMAINING])
+     */
+
+    //         @operand_type_return [TRAIT] [ASSOC-TYPE-NAME?] {RETURN} ([TYPE] [DELIMITER] [REMAINING])
+    // Return: unop     [TYPE]      [TRAIT] [ASSOC-TYPE-NAME?]                  [DELIMITER] [REMAINING]
+    (@operand_type_return  $trait_s:tt  $assoc_type_name_s:tt  $return_c:tt  ($type_s:tt  $delimiter_s:tt  $remaining_s:tt)) => {
+        $crate::__return!((unop  $type_s  $trait_s  $assoc_type_name_s  $delimiter_s  $remaining_s)  $return_c)
     };
 
     /*
@@ -520,8 +588,8 @@ macro_rules! __parse_type {
      * @loop_return [DONE] {RETURN} (DELIMITER [REMAINING])
      */
 
-    //    @loop_return [DONE]              {RETURN} (_not_ [TOKEN REST])
-    // -> @loop        [DONE TOKEN] [REST] {RETURN}
+    //    @loop_return [DONE] {RETURN} (_not_ [TOKEN   REST])
+    // -> @loop        [DONE                   TOKEN] [REST] {RETURN}
     (@loop_return  [$($done:tt)*]  $return_c:tt  (_not_  [$tok:tt  $($rest:tt)*])) => {
         $crate::__parse_type!(@loop  [$($done)*  $tok]  [$($rest)*]  $return_c)
     };
@@ -577,30 +645,30 @@ macro_rules! __parse_delimiter {
         $crate::__return!(([,]  [$($tokens)*])  $return_c)
     };
 
-    //                    [TOKEN  TOKENS] {RETURN}
-    // -> @op_info_return  TOKEN [TOKENS] {RETURN} (...)
+    //                       [TOKEN  TOKENS] {RETURN}
+    // -> @binop_info_return  TOKEN [TOKENS] {RETURN} (...)
     ([$tok:tt  $($tokens:tt)*]  $return_c:tt) => {
-        $crate::__op_info!(
+        $crate::__binop_info!(
             $tok
-            { $crate::__parse_delimiter!(@op_info_return  $tok  [$($tokens)*]  $return_c) }
+            { $crate::__parse_delimiter!(@binop_info_return  $tok  [$($tokens)*]  $return_c) }
         )
     };
 
     /*
-     * @op_info_return TOKEN [TOKENS] {RETURN} (...)
+     * @binop_info_return TOKEN [TOKENS] {RETURN} (...)
      */
 
     // The token is not recognized.
-    //         @op_info_return TOKEN [TOKENS] {RETURN} ()
-    // Return: not            [TOKEN  TOKENS]
-    (@op_info_return  $tok:tt  [$($tokens:tt)*]  $return_c:tt  ()) => {
+    //         @binop_info_return TOKEN [TOKENS] {RETURN} ()
+    // Return: not               [TOKEN  TOKENS]
+    (@binop_info_return  $tok:tt  [$($tokens:tt)*]  $return_c:tt  ()) => {
         $crate::__return!((_not_  [$tok  $($tokens)*])  $return_c)
     };
 
     // The token is BINOP.
-    //         @op_info_return BINOP      [TOKENS] {RETURN} ([TRAIT] ASSOC-TYPE-NAME?)
-    // Return: [[TRAIT] ASSOC-TYPE-NAME?] [TOKENS]
-    (@op_info_return  $tok:tt  $tokens_s:tt  $return_c:tt  ($trait_s:tt  $($assoc_type_name:ident)?)) => {
+    //         @binop_info_return BINOP [TOKENS] {RETURN} ([TRAIT] ASSOC-TYPE-NAME?)
+    // Return:                                            [[TRAIT] ASSOC-TYPE-NAME?] [TOKENS]
+    (@binop_info_return  $tok:tt  $tokens_s:tt  $return_c:tt  ($trait_s:tt  $($assoc_type_name:ident)?)) => {
         $crate::__return!(([$trait_s  $($assoc_type_name)?]  $tokens_s)  $return_c)
     };
 }
@@ -611,10 +679,28 @@ macro_rules! __parse_delimiter {
  * | OP    | [TRAIT] ASSOC-TYPE-NAME?
  * | OP    | NOTHING
  */
-
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __op_info {
+macro_rules! __unop_info {
+    (- $return_c:tt) => {
+        $crate::__return!(([::core::ops::Neg] Output) $return_c)
+    };
+
+    // Unrecognized operator.
+    ($op:tt $return_c:tt) => {
+        $crate::__return!(() $return_c)
+    };
+}
+
+/*
+ * | Input | Returns
+ * |-------|-------
+ * | OP    | [TRAIT] ASSOC-TYPE-NAME?
+ * | OP    | NOTHING
+ */
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __binop_info {
     (+ $return_c:tt) => {
         $crate::__return!(([::core::ops::Add] Output) $return_c)
     };

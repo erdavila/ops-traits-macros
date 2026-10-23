@@ -1,3 +1,470 @@
+use std::collections::HashSet;
+
+use proc_macro::TokenStream;
+use quote::ToTokens;
+use syn::parse::{Parse, ParseStream, Parser as _};
+use syn::punctuated::Punctuated;
+use syn::token::Paren;
+use syn::{
+    Error, GenericArgument, Ident, Item, Path, PathArguments, Result, Token, Type, TypeParamBound,
+    WherePredicate, parenthesized, parse_macro_input, parse_quote, parse_quote_spanned,
+};
+
+/*
+    OpsBound := Operation AssociatedType?
+    OpsExpr = Operation | Type
+
+    Operation := UnOp Term | Term BinOp RightOperand
+
+    RightOperand := '_' | Term
+    AssociatedType := '=' Term
+    Term := Type | '(' OpsExpr ')'
+
+    ------------------------------------------------------------
+
+    CLAUSE -> OpsBound
+    OPERATION -> OpsExpr
+
+    OPERAND / ASSOC / LEFT / TYPE -> Term
+    RAW-TYPE -> Type
+*/
+
+#[proc_macro_attribute]
+pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let ops_bounds = {
+        let parser = Punctuated::<OpsBound, Token![,]>::parse_terminated;
+        parser.parse(attr)
+    };
+
+    let mut item = parse_macro_input!(item as Item);
+    let where_clause = {
+        match &mut item {
+            // Item::Enum(item_enum) => todo!(),
+            Item::Fn(item_fn) => Ok(item_fn.sig.generics.make_where_clause()),
+            // Item::Impl(item_impl) => todo!(),
+            // Item::Struct(item_struct) => todo!(),
+            // Item::Trait(item_trait) => todo!(),
+            // Item::Type(item_type) => todo!(),
+            // Item::Union(item_union) => todo!(),
+            item => Err(Error::new_spanned(
+                item,
+                "the ops_bounds macro is only supported in functions",
+            )),
+        }
+    };
+
+    where_clause
+        .zip_combine(ops_bounds)
+        .map(|(wc, bounds)| {
+            // TODO: Consider using HashMap<Operation, HashSet<AssociatedType>>.
+
+            let unique_bounds: HashSet<OpsBound> =
+                bounds.into_iter().flat_map(OpsBound::all_bounds).collect();
+
+            let predicates = unique_bounds
+                .into_iter()
+                .map(OpsBound::into_where_predicate);
+
+            wc.predicates.extend(predicates);
+        })
+        .map_or_else(Error::into_compile_error, |()| item.into_token_stream())
+        .into()
+}
+
+#[proc_macro]
+pub fn ops_type(item: TokenStream) -> TokenStream {
+    let expr = parse_macro_input!(item as OpsExpr);
+
+    expr.into_type().into_token_stream().into()
+}
+
+// TODO: consider using Rc instead of Box.
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OpsBound {
+    operation: Operation,
+    assoc: AssociatedType,
+}
+impl OpsBound {
+    fn all_bounds(self) -> Vec<OpsBound> {
+        let mut bounds = Vec::from([self.clone()]);
+        bounds.extend(self.operation.sub_bounds());
+        bounds.extend(self.assoc.all_bounds());
+        bounds
+    }
+
+    fn into_where_predicate(self) -> WherePredicate {
+        let (bounded_term, bound) = match self.operation {
+            Operation::Unary { unop, operand } => (operand, unop.type_param_bound(self.assoc)),
+            Operation::Binary { left, binop, right } => {
+                (left, binop.type_param_bound(right, self.assoc))
+            }
+        };
+
+        let bounded_ty = bounded_term.into_type();
+        parse_quote! { #bounded_ty : #bound }
+    }
+}
+impl Parse for OpsBound {
+    fn parse(input: ParseStream) -> Result<Self> {
+        Ok(OpsBound {
+            operation: input.parse()?,
+            assoc: input.parse()?,
+        })
+    }
+}
+impl From<Operation> for OpsBound {
+    fn from(operation: Operation) -> Self {
+        OpsBound {
+            operation,
+            assoc: AssociatedType::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum OpsExpr {
+    Operation(Operation),
+    Type(Box<Type>),
+}
+impl OpsExpr {
+    fn all_bounds(&self) -> Vec<OpsBound> {
+        match self {
+            OpsExpr::Operation(operation) => operation.all_bounds(),
+            OpsExpr::Type(_) => Vec::new(),
+        }
+    }
+
+    fn into_type(self) -> Type {
+        match self {
+            OpsExpr::Operation(operation) => operation.into_type(),
+            OpsExpr::Type(_) => todo!("OpsExpr::into_type - Type"),
+        }
+    }
+}
+impl Parse for OpsExpr {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if let Some(unop) = UnOp::try_parse(input) {
+            Ok(OpsExpr::Operation(Operation::Unary {
+                unop,
+                operand: input.parse()?,
+            }))
+        } else if input.peek(Paren) {
+            todo!("Parse for OpsExpr: paren")
+        } else {
+            let ty = input.parse()?;
+            if let Some(binop) = BinOp::try_parse(input) {
+                Ok(OpsExpr::Operation(Operation::Binary {
+                    left: Box::new(Term::Type(ty)),
+                    binop,
+                    right: input.parse()?,
+                }))
+            } else {
+                Ok(OpsExpr::Type(ty))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Operation {
+    Unary {
+        unop: UnOp,
+        operand: Box<Term>,
+    },
+    Binary {
+        left: Box<Term>,
+        binop: BinOp,
+        right: RightOperand,
+    },
+}
+impl Operation {
+    fn all_bounds(&self) -> Vec<OpsBound> {
+        let mut bounds = self.sub_bounds();
+        bounds.push(self.clone().into());
+        bounds
+    }
+
+    fn sub_bounds(&self) -> Vec<OpsBound> {
+        match self {
+            Operation::Unary { unop: _, operand } => operand.all_bounds(),
+            Operation::Binary {
+                left,
+                binop: _,
+                right,
+            } => {
+                let mut bounds = left.all_bounds();
+                bounds.extend(right.all_bounds());
+                bounds
+            }
+        }
+    }
+
+    fn into_type(self) -> Type {
+        match self {
+            Operation::Unary { unop, operand } => unop.qualified_type(operand.into_type()),
+            Operation::Binary { left, binop, right } => {
+                binop.qualified_type(left.into_type(), right)
+            }
+        }
+    }
+}
+impl Parse for Operation {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if let Some(unop) = UnOp::try_parse(input) {
+            Ok(Operation::Unary {
+                unop,
+                operand: input.parse()?,
+            })
+        } else {
+            Ok(Operation::Binary {
+                left: input.parse()?,
+                binop: input.parse()?,
+                right: input.parse()?,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RightOperand {
+    SelfRhs(Token![_]),
+    Term(Box<Term>),
+}
+impl RightOperand {
+    fn all_bounds(&self) -> Vec<OpsBound> {
+        match self {
+            RightOperand::SelfRhs(_) => Vec::new(),
+            RightOperand::Term(term) => term.all_bounds(),
+        }
+    }
+
+    fn into_generic_argument(self) -> Option<GenericArgument> {
+        match self {
+            RightOperand::SelfRhs(_) => None,
+            RightOperand::Term(term) => {
+                let arg = term.into_type();
+                Some(parse_quote! { #arg })
+            }
+        }
+    }
+}
+impl Parse for RightOperand {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(Token![_]) {
+            Ok(RightOperand::SelfRhs(input.parse()?))
+        } else {
+            Ok(RightOperand::Term(input.parse()?))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum AssociatedType {
+    None,
+    Some { eq_token: Token![=], term: Term },
+}
+impl AssociatedType {
+    fn all_bounds(self) -> Vec<OpsBound> {
+        match self {
+            AssociatedType::None => Vec::new(),
+            AssociatedType::Some { eq_token: _, term } => term.all_bounds(),
+        }
+    }
+
+    fn into_generic_argument(self, op: &impl Op) -> Option<GenericArgument> {
+        match self {
+            AssociatedType::None => None,
+            AssociatedType::Some { eq_token, term } => {
+                let assoc_type_name = op.assoc_type_name();
+                let assoc = term.into_type();
+                Some(parse_quote! { #assoc_type_name #eq_token #assoc })
+            }
+        }
+    }
+}
+impl Parse for AssociatedType {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(Token![=]) {
+            Ok(AssociatedType::Some {
+                eq_token: input.parse()?,
+                term: input.parse()?,
+            })
+        } else {
+            Ok(AssociatedType::None)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Term {
+    Type(Box<Type>),
+    Group { paren: Paren, expr: Box<OpsExpr> },
+}
+impl Term {
+    fn all_bounds(&self) -> Vec<OpsBound> {
+        match self {
+            Term::Type(_) => Vec::new(),
+            Term::Group { paren: _, expr } => expr.all_bounds(),
+        }
+    }
+
+    fn into_type(self) -> Type {
+        match self {
+            Term::Type(ty) => *ty,
+            Term::Group { paren: _, expr } => expr.into_type(),
+        }
+    }
+}
+impl Parse for Term {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(Paren) {
+            let content;
+            Ok(Term::Group {
+                paren: parenthesized!(content in input),
+                expr: content.parse()?,
+            })
+        } else {
+            Ok(Term::Type(input.parse()?))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum UnOp {
+    Neg(Token![-]),
+}
+impl UnOp {
+    fn try_parse(input: ParseStream) -> Option<Self> {
+        if input.peek(Token![-]) {
+            Some(UnOp::Neg(input.parse().unwrap()))
+        } else {
+            None
+        }
+    }
+
+    fn qualified_type(self, bound_ty: Type) -> Type {
+        self.qualified_type_with_path_args(bound_ty, PathArguments::None)
+    }
+
+    fn type_param_bound(self, assoc: AssociatedType) -> TypeParamBound {
+        self.type_param_bound_with_path_args(None, assoc)
+    }
+}
+impl Op for UnOp {
+    fn trait_path(&self) -> Path {
+        match self {
+            UnOp::Neg(minus) => parse_quote_spanned! { minus.span => ::core::ops::Neg },
+        }
+    }
+
+    fn assoc_type_name(&self) -> Ident {
+        match self {
+            UnOp::Neg(minus) => parse_quote_spanned! { minus.span => Output },
+        }
+    }
+}
+impl Parse for UnOp {
+    fn parse(input: ParseStream) -> Result<Self> {
+        Ok(UnOp::Neg(input.parse()?))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum BinOp {
+    Mul(Token![*]),
+}
+impl BinOp {
+    fn try_parse(input: ParseStream) -> Option<Self> {
+        if input.peek(Token![*]) {
+            Some(BinOp::Mul(input.parse().unwrap()))
+        } else {
+            None
+        }
+    }
+
+    fn qualified_type(self, bound_ty: Type, rhs: RightOperand) -> Type {
+        let path_args = path_arguments([rhs.into_generic_argument()]);
+        self.qualified_type_with_path_args(bound_ty, path_args)
+    }
+
+    fn type_param_bound(self, rhs: RightOperand, assoc: AssociatedType) -> TypeParamBound {
+        self.type_param_bound_with_path_args(rhs.into_generic_argument(), assoc)
+    }
+}
+impl Op for BinOp {
+    fn trait_path(&self) -> Path {
+        match self {
+            BinOp::Mul(star) => parse_quote_spanned! { star.span => ::core::ops::Mul },
+        }
+    }
+
+    fn assoc_type_name(&self) -> Ident {
+        match self {
+            BinOp::Mul(star) => parse_quote_spanned! { star.span => Output },
+        }
+    }
+}
+impl Parse for BinOp {
+    fn parse(input: ParseStream) -> Result<Self> {
+        Ok(BinOp::Mul(input.parse()?))
+    }
+}
+
+fn path_arguments(args: impl IntoIterator<Item = Option<GenericArgument>>) -> PathArguments {
+    let args: Punctuated<_, Token![,]> = args.into_iter().flatten().collect();
+    if args.is_empty() {
+        PathArguments::None
+    } else {
+        PathArguments::AngleBracketed(parse_quote! { < #args > })
+    }
+}
+
+trait Op {
+    fn trait_path(&self) -> Path;
+    fn assoc_type_name(&self) -> Ident;
+
+    fn qualified_type_with_path_args(self, bound_ty: Type, path_args: PathArguments) -> Type
+    where
+        Self: Sized,
+    {
+        let trait_path = self.trait_path();
+        let assoc_type_name = self.assoc_type_name();
+        parse_quote! { <#bound_ty as #trait_path #path_args>::#assoc_type_name }
+    }
+
+    fn type_param_bound_with_path_args(
+        &self,
+        rhs_arg: Option<GenericArgument>,
+        assoc: AssociatedType,
+    ) -> TypeParamBound
+    where
+        Self: Sized,
+    {
+        let trait_path = self.trait_path();
+        let path_args = path_arguments([rhs_arg, assoc.into_generic_argument(self)]);
+        parse_quote! { #trait_path #path_args }
+    }
+}
+
+trait ResultExt<T> {
+    fn zip_combine<U>(self, other: Result<U>) -> Result<(T, U)>;
+}
+impl<T> ResultExt<T> for Result<T> {
+    fn zip_combine<U>(self, other: Result<U>) -> Result<(T, U)> {
+        match (self, other) {
+            (Ok(x), Ok(y)) => Ok((x, y)),
+            (Ok(_), Err(e2)) => Err(e2),
+            (Err(e1), Ok(_)) => Err(e1),
+            (Err(mut e1), Err(e2)) => {
+                e1.combine(e2);
+                Err(e1)
+            }
+        }
+    }
+}
+
+/*
 #![no_std]
 //! ...
 //!
@@ -861,3 +1328,4 @@ macro_rules! __return {
         $macro_name $(::$path)* ! ($($macro_args)*  $result_p)
     };
 }
+*/

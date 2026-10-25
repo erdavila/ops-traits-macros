@@ -5,6 +5,7 @@ use proc_macro::TokenStream;
 use quote::ToTokens;
 use syn::parse::{Parse, ParseStream, Parser as _};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::token::Paren;
 use syn::{
     Error, GenericArgument, Ident, Item, Path, PathArguments, Result, Token, Type, TypeParamBound,
@@ -19,8 +20,8 @@ use syn::{
     RightOperand := '_' | Term
     Term := Type | '(' OpsExpr ')' | '(' Type ')'
 
-    UnOp := '-'
-    BinOp := '+' | '-' | '*'
+    UnOp := '*' | '-' | '!'
+    BinOp := '+' | '-' | '*' | '/' | '%' | '<<' | '>>' | '&' | '^' | '|'
 */
 
 #[proc_macro_attribute]
@@ -325,12 +326,18 @@ impl<T: Into<Box<Type>>> From<T> for Term {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum UnOp {
+    Deref(Token![*]),
     Neg(Token![-]),
+    Not(Token![!]),
 }
 impl UnOp {
     fn try_parse(input: ParseStream) -> Result<Option<Self>> {
-        if input.peek(Token![-]) {
+        if input.peek(Token![*]) {
+            Ok(Some(UnOp::Deref(input.parse()?)))
+        } else if input.peek(Token![-]) {
             Ok(Some(UnOp::Neg(input.parse()?)))
+        } else if input.peek(Token![!]) {
+            Ok(Some(UnOp::Not(input.parse()?)))
         } else {
             Ok(None)
         }
@@ -347,19 +354,32 @@ impl UnOp {
 impl Op for UnOp {
     fn trait_path(&self) -> Path {
         match self {
+            UnOp::Deref(star) => parse_quote_spanned! { star.span => ::core::ops::Deref },
             UnOp::Neg(minus) => parse_quote_spanned! { minus.span => ::core::ops::Neg },
+            UnOp::Not(not) => parse_quote_spanned! { not.span => ::core::ops::Not },
         }
     }
 
     fn assoc_type_name(&self) -> Ident {
         match self {
+            UnOp::Deref(star) => parse_quote_spanned! { star.span => Target },
             UnOp::Neg(minus) => parse_quote_spanned! { minus.span => Output },
+            UnOp::Not(not) => parse_quote_spanned! { not.span => Output },
         }
     }
 }
 impl Parse for UnOp {
     fn parse(input: ParseStream) -> Result<Self> {
-        Ok(UnOp::Neg(input.parse()?))
+        let la = input.lookahead1();
+        if la.peek(Token![*]) {
+            Ok(UnOp::Deref(input.parse()?))
+        } else if la.peek(Token![-]) {
+            Ok(UnOp::Neg(input.parse()?))
+        } else if la.peek(Token![!]) {
+            Ok(UnOp::Not(input.parse()?))
+        } else {
+            Err(la.error())
+        }
     }
 }
 
@@ -368,6 +388,13 @@ enum BinOp {
     Add(Token![+]),
     Sub(Token![-]),
     Mul(Token![*]),
+    Div(Token![/]),
+    Rem(Token![%]),
+    Shl(Token![<<]),
+    Shr(Token![>>]),
+    BitAnd(Token![&]),
+    BitXor(Token![^]),
+    BitOr(Token![|]),
 }
 impl BinOp {
     fn try_parse(input: ParseStream) -> Result<Option<Self>> {
@@ -377,6 +404,20 @@ impl BinOp {
             Ok(Some(BinOp::Sub(input.parse()?)))
         } else if input.peek(Token![*]) {
             Ok(Some(BinOp::Mul(input.parse()?)))
+        } else if input.peek(Token![/]) {
+            Ok(Some(BinOp::Div(input.parse()?)))
+        } else if input.peek(Token![%]) {
+            Ok(Some(BinOp::Rem(input.parse()?)))
+        } else if input.peek(Token![<<]) {
+            Ok(Some(BinOp::Shl(input.parse()?)))
+        } else if input.peek(Token![>>]) {
+            Ok(Some(BinOp::Shr(input.parse()?)))
+        } else if input.peek(Token![&]) {
+            Ok(Some(BinOp::BitAnd(input.parse()?)))
+        } else if input.peek(Token![^]) {
+            Ok(Some(BinOp::BitXor(input.parse()?)))
+        } else if input.peek(Token![|]) {
+            Ok(Some(BinOp::BitOr(input.parse()?)))
         } else {
             Ok(None)
         }
@@ -394,17 +435,31 @@ impl BinOp {
 impl Op for BinOp {
     fn trait_path(&self) -> Path {
         match self {
-            BinOp::Add(plus) => parse_quote_spanned! { plus.span => ::core::ops::Add },
-            BinOp::Sub(minus) => parse_quote_spanned! { minus.span => ::core::ops::Sub },
-            BinOp::Mul(star) => parse_quote_spanned! { star.span => ::core::ops::Mul },
+            BinOp::Add(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Add },
+            BinOp::Sub(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Sub },
+            BinOp::Mul(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Mul },
+            BinOp::Div(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Div },
+            BinOp::Rem(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Rem },
+            BinOp::Shl(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Shl },
+            BinOp::Shr(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Shr },
+            BinOp::BitAnd(tok) => parse_quote_spanned! { tok.span() => ::core::ops::BitAnd },
+            BinOp::BitXor(tok) => parse_quote_spanned! { tok.span() => ::core::ops::BitXor },
+            BinOp::BitOr(tok) => parse_quote_spanned! { tok.span() => ::core::ops::BitOr },
         }
     }
 
     fn assoc_type_name(&self) -> Ident {
         match self {
-            BinOp::Add(plus) => parse_quote_spanned! { plus.span => Output },
-            BinOp::Sub(minus) => parse_quote_spanned! { minus.span => Output },
-            BinOp::Mul(star) => parse_quote_spanned! { star.span => Output },
+            BinOp::Add(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::Sub(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::Mul(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::Div(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::Rem(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::Shl(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::Shr(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::BitAnd(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::BitXor(tok) => parse_quote_spanned! { tok.span() => Output },
+            BinOp::BitOr(tok) => parse_quote_spanned! { tok.span() => Output },
         }
     }
 }
@@ -418,6 +473,20 @@ impl Parse for BinOp {
             Ok(BinOp::Sub(input.parse()?))
         } else if la.peek(Token![*]) {
             Ok(BinOp::Mul(input.parse()?))
+        } else if la.peek(Token![/]) {
+            Ok(BinOp::Div(input.parse()?))
+        } else if la.peek(Token![%]) {
+            Ok(BinOp::Rem(input.parse()?))
+        } else if la.peek(Token![<<]) {
+            Ok(BinOp::Shl(input.parse()?))
+        } else if la.peek(Token![>>]) {
+            Ok(BinOp::Shr(input.parse()?))
+        } else if la.peek(Token![&]) {
+            Ok(BinOp::BitAnd(input.parse()?))
+        } else if la.peek(Token![^]) {
+            Ok(BinOp::BitXor(input.parse()?))
+        } else if la.peek(Token![|]) {
+            Ok(BinOp::BitOr(input.parse()?))
         } else {
             Err(la.error())
         }

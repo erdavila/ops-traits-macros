@@ -1,27 +1,39 @@
+mod operator;
+mod output;
+
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 
 use proc_macro::TokenStream;
-use quote::ToTokens;
-use syn::parse::{Parse, ParseStream, Parser as _};
+use quote::ToTokens as _;
+use syn::parse::{Lookahead1, Parse, ParseStream, Parser as _};
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
 use syn::token::Paren;
-use syn::{
-    Error, GenericArgument, Ident, Item, Path, PathArguments, Result, Token, Type, TypeParamBound,
-    WherePredicate, parenthesized, parse_macro_input, parse_quote, parse_quote_spanned,
-};
+use syn::{Error, Item, Result, Token, Type, WherePredicate, parenthesized, parse_macro_input};
+
+use crate::operator::{BinOp, CombineBinOp, NoAssocTyBinOp, Op, UnOp};
+use crate::output::{qualified_type, where_predicate, where_predicate_with_assoc};
 
 /*
-    OpsBound := OpsExpr AssociatedType
-    OpsExpr := UnOp Term | Term BinOp RightOperand
+    OpsBound := AssocTyOpOpsBound | NoAssocTyOpOperation
+    OpsExpr := AssocTyOpOperation
 
-    AssociatedType := '=' Term | EMPTY
+    AssocTyOpOpsBound := AssocTyOpOperation AssocTyPredicate?
+    AssocTyOpOperation := UnaryOperation | BinaryOperation<CombineBinOp>
+    NoAssocTyOpOperation := BinaryOperation<NoAssocTyBinOp>
+
+    UnaryOperation := UnOp Term
+    BinaryOperation<O> := Term O RightOperand
+
     RightOperand := '_' | Term
-    Term := Type | '(' OpsExpr ')' | '(' Type ')'
+    AssocTyPredicate := '=' Term
+    Term := Type | '(' Type ')' | '(' AssocTyOpOperation ')'
 
     UnOp := '*' | '-' | '!'
-    BinOp := '+' | '-' | '*' | '/' | '%' | '<<' | '>>' | '&' | '^' | '|'
+    CombineBinOp := '+' | '-' | '*' | '/' | '%' | '<<' | '>>' | '&' | '^' | '|'
+    NoAssocTyBinOp := '+=' | '-=' | '*=' | '/=' | '%=' | '<<=' | '>>=' | '&=' | '^=' | '|='
+
+    BinOp := CombineBinOp | NoAssocTyBinOp
 */
 
 #[proc_macro_attribute]
@@ -58,33 +70,56 @@ pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
 fn ops_bounds_to_where_predicates(
     bounds: impl IntoIterator<Item = OpsBound>,
 ) -> impl Iterator<Item = WherePredicate> {
-    let mut unique_bounds = HashMap::new();
+    let mut unique_assoc_ty_op_bounds = HashMap::new();
+    let mut unique_no_assoc_ty_op_bounds = HashSet::new();
 
     for bound in bounds {
-        for expr in bound.sub_exprs() {
-            unique_bounds.entry(expr).or_insert(HashSet::new());
+        for sub_oper in bound.sub_opers() {
+            unique_assoc_ty_op_bounds
+                .entry(sub_oper)
+                .or_insert(HashSet::new());
         }
 
-        unique_bounds
-            .entry(bound.expr)
-            .or_insert(HashSet::new())
-            .insert(bound.assoc);
+        match bound {
+            OpsBound::AssocTyOp(bound) => {
+                let assocs = unique_assoc_ty_op_bounds
+                    .entry(bound.oper)
+                    .or_insert(HashSet::new());
+
+                if let Some(assoc) = bound.assoc {
+                    assocs.insert(assoc);
+                }
+            }
+            OpsBound::NoAssocTyOp(bound) => {
+                let oper = bound.into_oper();
+
+                unique_no_assoc_ty_op_bounds.insert(oper);
+            }
+        }
     }
 
-    unique_bounds
-        .into_iter()
-        .flat_map(|(expr, assocs)| {
-            // Ensure there is at least one OpsBound.
-            let no_assocs = assocs.is_empty().then(|| OpsBound::from(expr.clone()));
+    let assoc_ty_op_predicates =
+        unique_assoc_ty_op_bounds
+            .into_iter()
+            .flat_map(|(oper, assocs)| {
+                // Ensure there is at least one bound.
+                let no_assocs = assocs
+                    .is_empty()
+                    .then(|| oper.clone().into_where_predicate())
+                    .into_iter();
 
-            let with_assocs = assocs.into_iter().map(move |assoc| OpsBound {
-                expr: expr.clone(),
-                assoc,
+                let with_assocs = assocs
+                    .into_iter()
+                    .map(move |assoc| oper.clone().into_where_predicate_with_assoc(assoc));
+
+                no_assocs.chain(with_assocs)
             });
 
-            no_assocs.into_iter().chain(with_assocs)
-        })
-        .map(OpsBound::into_where_predicate)
+    let no_assoc_ty_op_predicates = unique_no_assoc_ty_op_bounds
+        .into_iter()
+        .map(NoAssocTyOpOperation::into_where_predicate);
+
+    assoc_ty_op_predicates.chain(no_assoc_ty_op_predicates)
 }
 
 #[proc_macro]
@@ -95,101 +130,144 @@ pub fn ops_type(item: TokenStream) -> TokenStream {
         .into()
 }
 
+/*
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> UnaryOperation AssocTyPredicate?
+ *           -> unop:UnOp operand:Term
+ *  => operand ':' trait(unop)
+ *
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> UnaryOperation AssocTyPredicate?
+ *           -> unop:UnOp operand:Term '=' assoc
+ *  => operand ':' trait(unop) '<' assoc_type_name(unop) '=' assoc '>'
+ *
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> BinaryOperation<CombineBinOp> AssocTyPredicate?
+ *           -> left:Term binop:CombineBinOp '_'
+ *  => left ':' trait(binop)
+ *
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> BinaryOperation<CombineBinOp> AssocTyPredicate?
+ *           -> left:Term binop:CombineBinOp '_' '=' assoc
+ *  => left ':' trait(binop) '<' assoc_type_name(binop) '=' assoc '>'
+ *
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> BinaryOperation<CombineBinOp> AssocTyPredicate?
+ *           -> left:Term binop:CombineBinOp right:Term
+ *  => left ':' trait(binop) '<' right '>'
+ *
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> BinaryOperation<CombineBinOp> AssocTyPredicate?
+ *           -> left:Term binop:CombineBinOp right:Term '=' assoc
+ *  => left ':' trait(binop) '<' right ',' assoc_type_name(binop) '=' assoc '>'
+ *
+ *  OpsBound -> BinaryOperation<NoAssocTyBinOp>
+ *           -> left:Term binop:NoAssocTyBinOp '_'
+ *  => left ':' trait(binop)
+ *
+ *  OpsBound -> BinaryOperation<NoAssocTyBinOp>
+ *           -> left:Term binop:NoAssocTyBinOp right:Term
+ *  => left ':' trait(binop) '<' right '>'
+ */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct OpsBound {
-    expr: OpsExpr,
-    assoc: AssociatedType,
+enum OpsBound {
+    AssocTyOp(AssocTyOpOpsBound),
+    NoAssocTyOp(BinaryOperation<NoAssocTyBinOp>),
 }
 impl OpsBound {
-    fn sub_exprs(&self) -> impl Iterator<Item = OpsExpr> + use<> {
-        self.expr.sub_exprs().chain(self.assoc.all_exprs())
-    }
-
-    fn into_where_predicate(self) -> WherePredicate {
-        let (bounded_term, bound) = match self.expr {
-            OpsExpr::Unary { unop, operand } => (operand, unop.type_param_bound(self.assoc)),
-            OpsExpr::Binary { left, binop, right } => {
-                (left, binop.type_param_bound(right, self.assoc))
-            }
+    fn sub_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
+        let (assoc_ty_op_opers, no_assoc_ty_op_opers) = match self {
+            OpsBound::AssocTyOp(bound) => (Some(bound.sub_opers()), None),
+            OpsBound::NoAssocTyOp(bound) => (None, Some(bound.sub_opers())),
         };
 
-        let bounded_ty = bounded_term.into_type();
-        parse_quote! { #bounded_ty : #bound }
+        let assoc_ty_op_opers = assoc_ty_op_opers.into_iter().flatten();
+        let no_assoc_ty_op_opers = no_assoc_ty_op_opers.into_iter().flatten();
+
+        assoc_ty_op_opers.chain(no_assoc_ty_op_opers)
     }
 }
 impl Parse for OpsBound {
     fn parse(input: ParseStream) -> Result<Self> {
-        Ok(OpsBound {
-            expr: input.parse()?,
-            assoc: input.parse()?,
-        })
-    }
-}
-impl From<OpsExpr> for OpsBound {
-    fn from(expr: OpsExpr) -> Self {
-        OpsBound {
-            expr,
-            assoc: AssociatedType::None,
+        if let Some(un_operation) = UnaryOperation::try_parse(input, &input.lookahead1())? {
+            Ok(OpsBound::AssocTyOp(AssocTyOpOpsBound {
+                oper: AssocTyOpOperation::Unary(un_operation),
+                assoc: AssocTyPredicate::try_parse(input, &input.lookahead1())?,
+            }))
+        } else {
+            let bin_operation: BinaryOperation<BinOp> = input.parse()?;
+
+            match bin_operation.binop {
+                BinOp::Combine(binop) => Ok(OpsBound::AssocTyOp(AssocTyOpOpsBound {
+                    oper: AssocTyOpOperation::Binary(BinaryOperation {
+                        left: bin_operation.left,
+                        binop,
+                        right: bin_operation.right,
+                    }),
+                    assoc: AssocTyPredicate::try_parse(input, &input.lookahead1())?,
+                })),
+                BinOp::NoAssocTy(binop) => Ok(OpsBound::NoAssocTyOp(BinaryOperation {
+                    left: bin_operation.left,
+                    binop,
+                    right: bin_operation.right,
+                })),
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum OpsExpr {
-    Unary {
-        unop: UnOp,
-        operand: Box<Term>,
-    },
-    Binary {
-        left: Box<Term>,
-        binop: BinOp,
-        right: RightOperand,
-    },
+struct AssocTyOpOpsBound {
+    oper: AssocTyOpOperation,
+    assoc: Option<AssocTyPredicate>,
 }
-impl OpsExpr {
-    fn all_exprs(&self) -> Box<dyn Iterator<Item = OpsExpr>> {
-        Box::new(once(self.clone()).chain(self.sub_exprs()))
-    }
-
-    fn sub_exprs(&self) -> impl Iterator<Item = OpsExpr> + use<> {
-        let (unary, binary) = match self {
-            OpsExpr::Unary { unop: _, operand } => (Some(operand.all_exprs()), None),
-            OpsExpr::Binary {
-                left,
-                binop: _,
-                right,
-            } => (None, Some(left.all_exprs().chain(right.all_exprs()))),
-        };
-
-        unary
+impl AssocTyOpOpsBound {
+    fn sub_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
+        let expr_opers = self.oper.sub_opers();
+        let assoc_opers = self
+            .assoc
+            .as_ref()
+            .map(AssocTyPredicate::all_opers)
             .into_iter()
-            .flatten()
-            .chain(binary.into_iter().flatten())
+            .flatten();
+        expr_opers.chain(assoc_opers)
     }
+}
 
+/*
+ *  OpsExpr -> AssocTyOpOperation
+ *          -> UnaryOperation
+ *          -> unop:UnOp operand:Term
+ *  => '<' operand 'as' trait(unop) '>' '::' assoc_type_name(unop)
+ *
+ *  OpsExpr -> AssocTyOpOperation
+ *          -> BinaryOperation<CombineBinOp>
+ *          -> left:Term binop:CombineBinOp '_'
+ *  => '<' left 'as' trait(binop) '>' '::' assoc_type_name(binop)
+ *
+ *  OpsExpr -> AssocTyOpOperation
+ *          -> BinaryOperation<CombineBinOp>
+ *          -> left:Term binop:CombineBinOp right:Term
+ *  => '<' left 'as' trait(binop) '<' right '>' '>' '::' assoc_type_name(binop)
+ */
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OpsExpr(AssocTyOpOperation);
+impl OpsExpr {
     fn into_type(self) -> Type {
-        match self {
-            OpsExpr::Unary { unop, operand } => unop.qualified_type(operand.into_type()),
-            OpsExpr::Binary { left, binop, right } => binop.qualified_type(left.into_type(), right),
-        }
+        self.0.into_type()
     }
 }
 impl Parse for OpsExpr {
     fn parse(input: ParseStream) -> Result<Self> {
-        if let Some(unop) = UnOp::try_parse(input)? {
-            // UnOp Term
-            Ok(OpsExpr::Unary {
-                unop,
-                operand: input.parse()?,
-            })
-        } else {
-            // Term BinOp RightOperand
-            Ok(OpsExpr::Binary {
-                left: input.parse()?,
-                binop: input.parse()?,
-                right: input.parse()?,
-            })
-        }
+        AssocTyOpOperation::parse(input).map(OpsExpr)
+    }
+}
+impl<T> From<T> for OpsExpr
+where
+    T: Into<AssocTyOpOperation>,
+{
+    fn from(value: T) -> Self {
+        OpsExpr(value.into())
     }
 }
 
@@ -199,23 +277,13 @@ enum RightOperand {
     Term(Box<Term>),
 }
 impl RightOperand {
-    fn all_exprs(&self) -> impl Iterator<Item = OpsExpr> + use<> {
+    fn all_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
         let opers = match self {
             RightOperand::SelfRhs(_) => None,
-            RightOperand::Term(term) => Some(term.all_exprs()),
+            RightOperand::Term(term) => Some(term.all_opers()),
         };
 
         opers.into_iter().flatten()
-    }
-
-    fn into_generic_argument(self) -> Option<GenericArgument> {
-        match self {
-            RightOperand::SelfRhs(_) => None,
-            RightOperand::Term(term) => {
-                let arg = term.into_type();
-                Some(parse_quote! { #arg })
-            }
-        }
     }
 }
 impl Parse for RightOperand {
@@ -229,54 +297,50 @@ impl Parse for RightOperand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum AssociatedType {
-    None,
-    Some { eq_token: Token![=], term: Term },
+struct AssocTyPredicate {
+    eq_token: Token![=],
+    term: Term,
 }
-impl AssociatedType {
-    fn all_exprs(&self) -> impl Iterator<Item = OpsExpr> + use<> {
-        let opers = match self {
-            AssociatedType::None => None,
-            AssociatedType::Some { eq_token: _, term } => Some(term.all_exprs()),
-        };
-
-        opers.into_iter().flatten()
-    }
-
-    fn into_generic_argument(self, op: &impl Op) -> Option<GenericArgument> {
-        match self {
-            AssociatedType::None => None,
-            AssociatedType::Some { eq_token, term } => {
-                let assoc_type_name = op.assoc_type_name();
-                let assoc = term.into_type();
-                Some(parse_quote! { #assoc_type_name #eq_token #assoc })
-            }
-        }
-    }
-}
-impl Parse for AssociatedType {
-    fn parse(input: ParseStream) -> Result<Self> {
-        if input.peek(Token![=]) {
-            Ok(AssociatedType::Some {
-                eq_token: input.parse()?,
-                term: input.parse()?,
-            })
+impl AssocTyPredicate {
+    fn try_parse(input: ParseStream, lookahead: &Lookahead1) -> Result<Option<Self>> {
+        if lookahead.peek(Token![=]) {
+            Some(Self::parse(input)).transpose()
         } else {
-            Ok(AssociatedType::None)
+            Ok(None)
         }
+    }
+
+    fn all_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
+        self.term.all_opers()
+    }
+}
+impl Parse for AssocTyPredicate {
+    fn parse(input: ParseStream) -> Result<Self> {
+        Ok(AssocTyPredicate {
+            eq_token: input.parse()?,
+            term: input.parse()?,
+        })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Term {
-    Type { paren: Option<Paren>, ty: Box<Type> },
-    Group { paren: Paren, expr: Box<OpsExpr> },
+    // Type | '(' Type ')'
+    Type {
+        paren: Option<Paren>,
+        ty: Box<Type>,
+    },
+    // '(' AssocTyOpOperation ')'
+    Group {
+        paren: Paren,
+        oper: Box<AssocTyOpOperation>,
+    },
 }
 impl Term {
-    fn all_exprs(&self) -> impl Iterator<Item = OpsExpr> + use<> {
+    fn all_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
         let opers = match self {
             Term::Type { .. } => None,
-            Term::Group { paren: _, expr } => Some(expr.all_exprs()),
+            Term::Group { oper, .. } => Some(oper.all_opers()),
         };
 
         opers.into_iter().flatten()
@@ -284,27 +348,33 @@ impl Term {
 
     fn into_type(self) -> Type {
         match self {
-            Term::Type { paren: _, ty } => *ty,
-            Term::Group { paren: _, expr } => expr.into_type(),
+            Term::Type { ty, .. } => *ty,
+            Term::Group { oper: expr, .. } => expr.into_type(),
         }
     }
 }
 impl Parse for Term {
     fn parse(input: ParseStream) -> Result<Self> {
         if input.peek(Paren) {
-            // '(' OpsExprOrType ')'
+            // '(' Type ')' | '(' AssocTyOpOperation ')'
             let content;
             let paren = parenthesized!(content in input);
 
             match content.parse()? {
-                OpsExprOrType::OpsExpr(expr) => Ok(Term::Group {
-                    paren,
-                    expr: Box::new(expr),
-                }),
-                OpsExprOrType::Type(ty) => Ok(Term::Type {
-                    paren: Some(paren),
-                    ty,
-                }),
+                TypeOrAssocTyOpOperation::AssocTyOpOperation(oper) => {
+                    // '(' AssocTyOpOperation ')'
+                    Ok(Term::Group {
+                        paren,
+                        oper: Box::new(oper),
+                    })
+                }
+                TypeOrAssocTyOpOperation::Type(ty) => {
+                    // '(' Type ')'
+                    Ok(Term::Type {
+                        paren: Some(paren),
+                        ty,
+                    })
+                }
             }
         } else {
             // Type
@@ -324,265 +394,231 @@ impl<T: Into<Box<Type>>> From<T> for Term {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum UnOp {
-    Deref(Token![*]),
-    Neg(Token![-]),
-    Not(Token![!]),
-}
-impl UnOp {
-    fn try_parse(input: ParseStream) -> Result<Option<Self>> {
-        if input.peek(Token![*]) {
-            Ok(Some(UnOp::Deref(input.parse()?)))
-        } else if input.peek(Token![-]) {
-            Ok(Some(UnOp::Neg(input.parse()?)))
-        } else if input.peek(Token![!]) {
-            Ok(Some(UnOp::Not(input.parse()?)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn qualified_type(self, bound_ty: Type) -> Type {
-        self.qualified_type_with_path_args(bound_ty, PathArguments::None)
-    }
-
-    fn type_param_bound(self, assoc: AssociatedType) -> TypeParamBound {
-        self.type_param_bound_with_path_args(None, assoc)
-    }
-}
-impl Op for UnOp {
-    fn trait_path(&self) -> Path {
-        match self {
-            UnOp::Deref(star) => parse_quote_spanned! { star.span => ::core::ops::Deref },
-            UnOp::Neg(minus) => parse_quote_spanned! { minus.span => ::core::ops::Neg },
-            UnOp::Not(not) => parse_quote_spanned! { not.span => ::core::ops::Not },
-        }
-    }
-
-    fn assoc_type_name(&self) -> Ident {
-        match self {
-            UnOp::Deref(star) => parse_quote_spanned! { star.span => Target },
-            UnOp::Neg(minus) => parse_quote_spanned! { minus.span => Output },
-            UnOp::Not(not) => parse_quote_spanned! { not.span => Output },
-        }
-    }
-}
-impl Parse for UnOp {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let la = input.lookahead1();
-        if la.peek(Token![*]) {
-            Ok(UnOp::Deref(input.parse()?))
-        } else if la.peek(Token![-]) {
-            Ok(UnOp::Neg(input.parse()?))
-        } else if la.peek(Token![!]) {
-            Ok(UnOp::Not(input.parse()?))
-        } else {
-            Err(la.error())
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum BinOp {
-    Add(Token![+]),
-    Sub(Token![-]),
-    Mul(Token![*]),
-    Div(Token![/]),
-    Rem(Token![%]),
-    Shl(Token![<<]),
-    Shr(Token![>>]),
-    BitAnd(Token![&]),
-    BitXor(Token![^]),
-    BitOr(Token![|]),
-}
-impl BinOp {
-    fn try_parse(input: ParseStream) -> Result<Option<Self>> {
-        if input.peek(Token![+]) {
-            Ok(Some(BinOp::Add(input.parse()?)))
-        } else if input.peek(Token![-]) {
-            Ok(Some(BinOp::Sub(input.parse()?)))
-        } else if input.peek(Token![*]) {
-            Ok(Some(BinOp::Mul(input.parse()?)))
-        } else if input.peek(Token![/]) {
-            Ok(Some(BinOp::Div(input.parse()?)))
-        } else if input.peek(Token![%]) {
-            Ok(Some(BinOp::Rem(input.parse()?)))
-        } else if input.peek(Token![<<]) {
-            Ok(Some(BinOp::Shl(input.parse()?)))
-        } else if input.peek(Token![>>]) {
-            Ok(Some(BinOp::Shr(input.parse()?)))
-        } else if input.peek(Token![&]) {
-            Ok(Some(BinOp::BitAnd(input.parse()?)))
-        } else if input.peek(Token![^]) {
-            Ok(Some(BinOp::BitXor(input.parse()?)))
-        } else if input.peek(Token![|]) {
-            Ok(Some(BinOp::BitOr(input.parse()?)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn qualified_type(self, bound_ty: Type, rhs: RightOperand) -> Type {
-        let path_args = path_arguments([rhs.into_generic_argument()]);
-        self.qualified_type_with_path_args(bound_ty, path_args)
-    }
-
-    fn type_param_bound(self, rhs: RightOperand, assoc: AssociatedType) -> TypeParamBound {
-        self.type_param_bound_with_path_args(rhs.into_generic_argument(), assoc)
-    }
-}
-impl Op for BinOp {
-    fn trait_path(&self) -> Path {
-        match self {
-            BinOp::Add(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Add },
-            BinOp::Sub(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Sub },
-            BinOp::Mul(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Mul },
-            BinOp::Div(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Div },
-            BinOp::Rem(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Rem },
-            BinOp::Shl(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Shl },
-            BinOp::Shr(tok) => parse_quote_spanned! { tok.span() => ::core::ops::Shr },
-            BinOp::BitAnd(tok) => parse_quote_spanned! { tok.span() => ::core::ops::BitAnd },
-            BinOp::BitXor(tok) => parse_quote_spanned! { tok.span() => ::core::ops::BitXor },
-            BinOp::BitOr(tok) => parse_quote_spanned! { tok.span() => ::core::ops::BitOr },
-        }
-    }
-
-    fn assoc_type_name(&self) -> Ident {
-        match self {
-            BinOp::Add(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::Sub(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::Mul(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::Div(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::Rem(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::Shl(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::Shr(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::BitAnd(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::BitXor(tok) => parse_quote_spanned! { tok.span() => Output },
-            BinOp::BitOr(tok) => parse_quote_spanned! { tok.span() => Output },
-        }
-    }
-}
-impl Parse for BinOp {
-    fn parse(input: ParseStream) -> Result<Self> {
-        let la = input.lookahead1();
-
-        if la.peek(Token![+]) {
-            Ok(BinOp::Add(input.parse()?))
-        } else if la.peek(Token![-]) {
-            Ok(BinOp::Sub(input.parse()?))
-        } else if la.peek(Token![*]) {
-            Ok(BinOp::Mul(input.parse()?))
-        } else if la.peek(Token![/]) {
-            Ok(BinOp::Div(input.parse()?))
-        } else if la.peek(Token![%]) {
-            Ok(BinOp::Rem(input.parse()?))
-        } else if la.peek(Token![<<]) {
-            Ok(BinOp::Shl(input.parse()?))
-        } else if la.peek(Token![>>]) {
-            Ok(BinOp::Shr(input.parse()?))
-        } else if la.peek(Token![&]) {
-            Ok(BinOp::BitAnd(input.parse()?))
-        } else if la.peek(Token![^]) {
-            Ok(BinOp::BitXor(input.parse()?))
-        } else if la.peek(Token![|]) {
-            Ok(BinOp::BitOr(input.parse()?))
-        } else {
-            Err(la.error())
-        }
-    }
-}
-
 /*
-   Helper type to help parsing Term.
-
-   The rule
-       Term := Type | '(' OpsExpr ')' | '(' Type ')'
-   becomes
-       Term := Type | '(' OpsExprOrType ')'
-
-   Then:
-       OpsExprOrType := Type | OpsExpr
-           ->
-       OpsExprOrType := Type
-                      | UnOp Term
-                      | Term BinOp RightOperand
-           ->
-       OpsExprOrType := Type
-                      | UnOp Term
-                      | Type BinOp RightOperand
-                      | '(' OpsExprOrType ')' BinOp RightOperand
-           ->
-       OpsExprOrType := UnOp Term
-                      | '(' OpsExprOrType ')' BinOp RightOperand
-                      | Type (BinOp RightOperand)?
-
-*/
-enum OpsExprOrType {
-    OpsExpr(OpsExpr),
+ *  Helper type to help parsing Term.
+ *
+ *  The rule
+ *      Term := Type | '(' Type ')' | '(' AssocTyOpOperation ')'
+ *  becomes
+ *      Term := Type | '(' TypeOrAssocTyOpOperation ')'
+ *
+ *  Then:
+ *      TypeOrAssocTyOpOperation := Type
+ *                                | AssocTyOpOperation
+ *         ->
+ *      TypeOrAssocTyOpOperation := Type
+ *                                | UnaryOperation
+ *                                | BinaryOperation<CombineBinOp>
+ *         ->
+ *      TypeOrAssocTyOpOperation := Type
+ *                                | UnOp Term
+ *                                | Term CombineBinOp RightOperand
+ *         ->
+ *      TypeOrAssocTyOpOperation := UnOp Term
+ *                                | '(' TypeOrAssocTyOpOperation ')' CombineBinOp RightOperand
+ *                                | Type (CombineBinOp RightOperand)?
+ */
+enum TypeOrAssocTyOpOperation {
+    AssocTyOpOperation(AssocTyOpOperation),
     Type(Box<Type>),
 }
-impl Parse for OpsExprOrType {
+impl Parse for TypeOrAssocTyOpOperation {
     fn parse(input: ParseStream) -> Result<Self> {
-        if let Some(unop) = UnOp::try_parse(input)? {
+        let lookahead = input.lookahead1();
+
+        if let Some(un_operation) = UnaryOperation::try_parse(input, &lookahead)? {
             // UnOp Term
-            Ok(OpsExprOrType::OpsExpr(OpsExpr::Unary {
-                unop,
-                operand: input.parse()?,
-            }))
+            Ok(TypeOrAssocTyOpOperation::AssocTyOpOperation(
+                un_operation.into(),
+            ))
         } else if input.peek(Paren) {
-            // '(' OpsExprOrType ')' BinOp RightOperand
-            Ok(OpsExprOrType::OpsExpr(input.parse()?))
+            // '(' TypeOrAssocTyOpOperation ')' CombineBinOp RightOperand
+            Ok(TypeOrAssocTyOpOperation::AssocTyOpOperation(input.parse()?))
         } else {
             let ty: Type = input.parse()?;
-            if let Some(binop) = BinOp::try_parse(input)? {
-                // Type BinOp RightOperand
-                Ok(OpsExprOrType::OpsExpr(OpsExpr::Binary {
+            if let Some(binop) = CombineBinOp::try_parse(input, &input.lookahead1())? {
+                // Type CombineBinOp RightOperand
+                let bin_operation = BinaryOperation {
                     left: Box::new(Term::from(ty)),
                     binop,
                     right: input.parse()?,
-                }))
+                };
+                Ok(TypeOrAssocTyOpOperation::AssocTyOpOperation(
+                    bin_operation.into(),
+                ))
             } else {
                 // Type
-                Ok(OpsExprOrType::Type(Box::new(ty)))
+                Ok(TypeOrAssocTyOpOperation::Type(Box::new(ty)))
             }
         }
     }
 }
 
-fn path_arguments(args: impl IntoIterator<Item = Option<GenericArgument>>) -> PathArguments {
-    let args: Punctuated<_, Token![,]> = args.into_iter().flatten().collect();
-    if args.is_empty() {
-        PathArguments::None
-    } else {
-        PathArguments::AngleBracketed(parse_quote! { < #args > })
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum AssocTyOpOperation {
+    Unary(UnaryOperation),
+    Binary(BinaryOperation<CombineBinOp>),
+}
+impl AssocTyOpOperation {
+    fn all_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
+        once(self.clone()).chain(self.sub_opers())
+    }
+
+    fn sub_opers(&self) -> Box<dyn Iterator<Item = AssocTyOpOperation>> {
+        let (un_opers, bin_opers) = match self {
+            AssocTyOpOperation::Unary(un_oper) => (Some(un_oper.sub_opers()), None),
+            AssocTyOpOperation::Binary(bin_oper) => (None, Some(bin_oper.sub_opers())),
+        };
+
+        let un_opers = un_opers.into_iter().flatten();
+        let bin_opers = bin_opers.into_iter().flatten();
+
+        Box::new(un_opers.chain(bin_opers))
+    }
+
+    fn into_type(self) -> Type {
+        match self {
+            AssocTyOpOperation::Unary(un_oper) => un_oper.into_type(),
+            AssocTyOpOperation::Binary(bin_oper) => bin_oper.into_type(),
+        }
+    }
+
+    fn into_where_predicate(self) -> WherePredicate {
+        match self {
+            AssocTyOpOperation::Unary(un_oper) => un_oper.into_where_predicate(),
+            AssocTyOpOperation::Binary(bin_oper) => bin_oper.into_where_predicate(),
+        }
+    }
+
+    fn into_where_predicate_with_assoc(self, assoc: AssocTyPredicate) -> WherePredicate {
+        match self {
+            AssocTyOpOperation::Unary(un_oper) => un_oper.into_where_predicate_with_assoc(assoc),
+            AssocTyOpOperation::Binary(bin_oper) => bin_oper.into_where_predicate_with_assoc(assoc),
+        }
+    }
+}
+impl Parse for AssocTyOpOperation {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let lookahead = input.lookahead1();
+
+        if let Some(un_oper) = UnaryOperation::try_parse(input, &lookahead)? {
+            // UnOp Term
+            Ok(AssocTyOpOperation::Unary(un_oper))
+        } else {
+            // Term CombineBinOp RightOperand
+            Ok(AssocTyOpOperation::Binary(input.parse()?))
+        }
+    }
+}
+impl From<UnaryOperation> for AssocTyOpOperation {
+    fn from(value: UnaryOperation) -> Self {
+        AssocTyOpOperation::Unary(value)
+    }
+}
+impl From<BinaryOperation<CombineBinOp>> for AssocTyOpOperation {
+    fn from(value: BinaryOperation<CombineBinOp>) -> Self {
+        AssocTyOpOperation::Binary(value)
     }
 }
 
-trait Op {
-    fn trait_path(&self) -> Path;
-    fn assoc_type_name(&self) -> Ident;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NoAssocTyOpOperation(BinaryOperation<NoAssocTyBinOp>);
+impl NoAssocTyOpOperation {
+    fn into_where_predicate(self) -> WherePredicate {
+        self.0.into_where_predicate()
+    }
+}
 
-    fn qualified_type_with_path_args(self, bound_ty: Type, path_args: PathArguments) -> Type
-    where
-        Self: Sized,
-    {
-        let trait_path = self.trait_path();
-        let assoc_type_name = self.assoc_type_name();
-        parse_quote! { <#bound_ty as #trait_path #path_args>::#assoc_type_name }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct UnaryOperation {
+    unop: UnOp,
+    operand: Box<Term>,
+}
+impl UnaryOperation {
+    fn try_parse(input: ParseStream, lookahead: &Lookahead1) -> Result<Option<Self>> {
+        if let Some(unop) = UnOp::try_parse(input, lookahead)? {
+            Ok(Some(UnaryOperation {
+                unop,
+                operand: input.parse()?,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
-    fn type_param_bound_with_path_args(
-        &self,
-        rhs_arg: Option<GenericArgument>,
-        assoc: AssociatedType,
-    ) -> TypeParamBound
-    where
-        Self: Sized,
-    {
-        let trait_path = self.trait_path();
-        let path_args = path_arguments([rhs_arg, assoc.into_generic_argument(self)]);
-        parse_quote! { #trait_path #path_args }
+    fn sub_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<> {
+        self.operand.all_opers()
+    }
+
+    fn into_where_predicate(self) -> WherePredicate {
+        where_predicate(*self.operand, &self.unop, None)
+    }
+
+    fn into_where_predicate_with_assoc(self, assoc: AssocTyPredicate) -> WherePredicate {
+        where_predicate_with_assoc(*self.operand, &self.unop, None, assoc)
+    }
+
+    fn into_type(self) -> Type {
+        qualified_type(*self.operand, &self.unop, None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BinaryOperation<O> {
+    left: Box<Term>,
+    binop: O,
+    right: RightOperand,
+}
+impl<O: Op> BinaryOperation<O> {
+    fn sub_opers(&self) -> impl Iterator<Item = AssocTyOpOperation> + use<O> {
+        let left_opers = self.left.all_opers();
+        let right_opers = self.right.all_opers();
+        left_opers.chain(right_opers)
+    }
+
+    fn into_where_predicate(self) -> WherePredicate {
+        where_predicate(*self.left, &self.binop, Some(self.right))
+    }
+}
+impl BinaryOperation<CombineBinOp> {
+    fn into_where_predicate_with_assoc(self, assoc: AssocTyPredicate) -> WherePredicate {
+        where_predicate_with_assoc(*self.left, &self.binop, Some(self.right), assoc)
+    }
+
+    fn into_type(self) -> Type {
+        qualified_type(*self.left, &self.binop, Some(self.right))
+    }
+}
+impl BinaryOperation<NoAssocTyBinOp> {
+    fn into_oper(self) -> NoAssocTyOpOperation {
+        NoAssocTyOpOperation(self)
+    }
+}
+impl<O: Parse> Parse for BinaryOperation<O> {
+    fn parse(input: ParseStream) -> Result<Self> {
+        Ok(BinaryOperation {
+            left: input.parse()?,
+            binop: input.parse()?,
+            right: input.parse()?,
+        })
+    }
+}
+impl From<BinaryOperation<CombineBinOp>> for BinaryOperation<BinOp> {
+    fn from(BinaryOperation { left, binop, right }: BinaryOperation<CombineBinOp>) -> Self {
+        BinaryOperation {
+            left,
+            binop: BinOp::Combine(binop),
+            right,
+        }
+    }
+}
+impl From<BinaryOperation<NoAssocTyBinOp>> for BinaryOperation<BinOp> {
+    fn from(BinaryOperation { left, binop, right }: BinaryOperation<NoAssocTyBinOp>) -> Self {
+        BinaryOperation {
+            left,
+            binop: BinOp::NoAssocTy(binop),
+            right,
+        }
     }
 }
 

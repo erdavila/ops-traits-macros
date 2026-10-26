@@ -209,3 +209,123 @@ fn bitor() {
     assert_eq!(f(0b1001, 0b0011), 0b1011);
     assert_eq!(g(0b1001, 0b0011), 0b1011);
 }
+
+#[test]
+fn add_assign() {
+    #[ops_bounds(T += U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x += y;
+    }
+
+    let mut n = 3;
+    f(&mut n, 4);
+    assert_eq!(n, 7);
+}
+
+#[test]
+fn sub_assign() {
+    #[ops_bounds(T -= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x -= y;
+    }
+
+    let mut n = 7;
+    f(&mut n, 4);
+    assert_eq!(n, 3);
+}
+
+#[test]
+fn mul_assign() {
+    #[ops_bounds(T *= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x *= y;
+    }
+
+    let mut n = 3;
+    f(&mut n, 2);
+    assert_eq!(n, 6);
+}
+
+#[test]
+fn div_assign() {
+    #[ops_bounds(T /= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x /= y;
+    }
+
+    let mut n = 6;
+    f(&mut n, 2);
+    assert_eq!(n, 3);
+}
+
+#[test]
+fn rem_assign() {
+    #[ops_bounds(T %= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x %= y;
+    }
+
+    let mut n = 8;
+    f(&mut n, 3);
+    assert_eq!(n, 2);
+}
+
+#[test]
+fn shl_assign() {
+    #[ops_bounds(T <<= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x <<= y;
+    }
+
+    let mut n = 0b000_101;
+    f(&mut n, 2);
+    assert_eq!(n, 0b010_100);
+}
+
+#[test]
+fn shr_assign() {
+    #[ops_bounds(T >>= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x >>= y;
+    }
+
+    let mut n = 0b010_100;
+    f(&mut n, 2);
+    assert_eq!(n, 0b000_101);
+}
+
+#[test]
+fn bitand_assign() {
+    #[ops_bounds(T &= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x &= y;
+    }
+
+    let mut n = 0b0111;
+    f(&mut n, 0b1110);
+    assert_eq!(n, 0b0110);
+}
+
+#[test]
+fn bitxor_assign() {
+    #[ops_bounds(T ^= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x ^= y;
+    }
+
+    let mut n = 0b0111;
+    f(&mut n, 0b1110);
+    assert_eq!(n, 0b1001);
+}
+
+#[test]
+fn bitor_assign() {
+    #[ops_bounds(T |= U)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x |= y;
+    }
+
+    let mut n = 0b1001;
+    f(&mut n, 0b0011);
+    assert_eq!(n, 0b1011);
+}

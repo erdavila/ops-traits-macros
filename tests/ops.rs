@@ -329,3 +329,54 @@ fn bitor_assign() {
     f(&mut n, 0b0011);
     assert_eq!(n, 0b1011);
 }
+
+#[test]
+fn partial_eq() {
+    #[ops_bounds(T == U)]
+    fn eq<T, U>(x: &T, y: &U) -> [bool; 2] {
+        [x == y, x != y]
+    }
+
+    #[ops_bounds(T != U)]
+    fn ne<T, U>(x: &T, y: &U) -> [bool; 2] {
+        [x == y, x != y]
+    }
+
+    assert_eq!(eq(&3, &4), [false, true]);
+    assert_eq!(ne(&3, &4), [false, true]);
+}
+
+#[test]
+fn partial_ord() {
+    #[ops_bounds(T <=> U)]
+    fn cmp<T, U>(x: &T, y: &U) -> [bool; 6] {
+        [x < y, x > y, x <= y, x >= y, x == y, x != y]
+    }
+
+    // Note: parentheses is required around the left operand.
+    #[ops_bounds((T) < U)]
+    fn lt<T, U>(x: &T, y: &U) -> [bool; 6] {
+        [x < y, x > y, x <= y, x >= y, x == y, x != y]
+    }
+
+    #[ops_bounds(T > U)]
+    fn gt<T, U>(x: &T, y: &U) -> [bool; 6] {
+        [x < y, x > y, x <= y, x >= y, x == y, x != y]
+    }
+
+    #[ops_bounds(T <= U)]
+    fn le<T, U>(x: &T, y: &U) -> [bool; 6] {
+        [x < y, x > y, x <= y, x >= y, x == y, x != y]
+    }
+
+    #[ops_bounds(T >= U)]
+    fn ge<T, U>(x: &T, y: &U) -> [bool; 6] {
+        [x < y, x > y, x <= y, x >= y, x == y, x != y]
+    }
+
+    assert_eq!(cmp(&3, &4), [true, false, true, false, false, true]);
+    assert_eq!(lt(&3, &4), [true, false, true, false, false, true]);
+    assert_eq!(gt(&3, &4), [true, false, true, false, false, true]);
+    assert_eq!(le(&3, &4), [true, false, true, false, false, true]);
+    assert_eq!(ge(&3, &4), [true, false, true, false, false, true]);
+}

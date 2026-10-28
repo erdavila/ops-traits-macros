@@ -1,6 +1,8 @@
 use syn::parse::{Lookahead1, Parse, ParseStream};
 use syn::spanned::Spanned as _;
-use syn::{Ident, Path, Result, Token, parse_quote_spanned};
+use syn::{Ident, Path, Result, Token, custom_punctuation, parse_quote_spanned};
+
+custom_punctuation!(Cmp, <=>);
 
 pub(crate) trait Op {
     fn trait_path(&self) -> Path;
@@ -135,39 +137,60 @@ impl Parse for CombineBinOp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum NoAssocTyBinOp {
-    Add(Token![+=]),
-    Sub(Token![-=]),
-    Mul(Token![*=]),
-    Div(Token![/=]),
-    Rem(Token![%=]),
-    Shl(Token![<<=]),
-    Shr(Token![>>=]),
-    BitAnd(Token![&=]),
-    BitXor(Token![^=]),
-    BitOr(Token![|=]),
+    AddAssign(Token![+=]),
+    SubAssign(Token![-=]),
+    MulAssign(Token![*=]),
+    DivAssign(Token![/=]),
+    RemAssign(Token![%=]),
+    ShlAssign(Token![<<=]),
+    ShrAssign(Token![>>=]),
+    BitAndAssign(Token![&=]),
+    BitXorAssign(Token![^=]),
+    BitOrAssign(Token![|=]),
+    PartialEqEq(Token![==]),
+    PartialEqNe(Token![!=]),
+    PartialOrdCmp(Cmp),
+    PartialOrdLt(Token![<]),
+    PartialOrdGt(Token![>]),
+    PartialOrdLe(Token![<=]),
+    PartialOrdGe(Token![>=]),
 }
 impl NoAssocTyBinOp {
     fn try_parse(input: ParseStream, lookahead: &Lookahead1) -> Result<Option<Self>> {
         if lookahead.peek(Token![+=]) {
-            Ok(Some(NoAssocTyBinOp::Add(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::AddAssign(input.parse()?)))
         } else if lookahead.peek(Token![-=]) {
-            Ok(Some(NoAssocTyBinOp::Sub(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::SubAssign(input.parse()?)))
         } else if lookahead.peek(Token![*=]) {
-            Ok(Some(NoAssocTyBinOp::Mul(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::MulAssign(input.parse()?)))
         } else if lookahead.peek(Token![/=]) {
-            Ok(Some(NoAssocTyBinOp::Div(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::DivAssign(input.parse()?)))
         } else if lookahead.peek(Token![%=]) {
-            Ok(Some(NoAssocTyBinOp::Rem(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::RemAssign(input.parse()?)))
         } else if lookahead.peek(Token![<<=]) {
-            Ok(Some(NoAssocTyBinOp::Shl(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::ShlAssign(input.parse()?)))
         } else if lookahead.peek(Token![>>=]) {
-            Ok(Some(NoAssocTyBinOp::Shr(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::ShrAssign(input.parse()?)))
         } else if lookahead.peek(Token![&=]) {
-            Ok(Some(NoAssocTyBinOp::BitAnd(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::BitAndAssign(input.parse()?)))
         } else if lookahead.peek(Token![^=]) {
-            Ok(Some(NoAssocTyBinOp::BitXor(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::BitXorAssign(input.parse()?)))
         } else if lookahead.peek(Token![|=]) {
-            Ok(Some(NoAssocTyBinOp::BitOr(input.parse()?)))
+            Ok(Some(NoAssocTyBinOp::BitOrAssign(input.parse()?)))
+        } else if lookahead.peek(Token![==]) {
+            Ok(Some(NoAssocTyBinOp::PartialEqEq(input.parse()?)))
+        } else if lookahead.peek(Token![!=]) {
+            Ok(Some(NoAssocTyBinOp::PartialEqNe(input.parse()?)))
+        } else if lookahead.peek(Cmp) {
+            Ok(Some(NoAssocTyBinOp::PartialOrdCmp(input.parse()?)))
+        } else if lookahead.peek(Token![<=]) {
+            Ok(Some(NoAssocTyBinOp::PartialOrdLe(input.parse()?)))
+        } else if lookahead.peek(Token![>=]) {
+            Ok(Some(NoAssocTyBinOp::PartialOrdGe(input.parse()?)))
+        } else if lookahead.peek(Token![<]) && !lookahead.peek(Token![<<]) {
+            Ok(Some(NoAssocTyBinOp::PartialOrdLt(input.parse()?)))
+        } else if lookahead.peek(Token![>]) && !lookahead.peek(Token![>>]) {
+            Ok(Some(NoAssocTyBinOp::PartialOrdGt(input.parse()?)))
         } else {
             Ok(None)
         }
@@ -176,35 +199,56 @@ impl NoAssocTyBinOp {
 impl Op for NoAssocTyBinOp {
     fn trait_path(&self) -> Path {
         match self {
-            NoAssocTyBinOp::Add(tok) => {
+            NoAssocTyBinOp::AddAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::AddAssign }
             }
-            NoAssocTyBinOp::Sub(tok) => {
+            NoAssocTyBinOp::SubAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::SubAssign }
             }
-            NoAssocTyBinOp::Mul(tok) => {
+            NoAssocTyBinOp::MulAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::MulAssign }
             }
-            NoAssocTyBinOp::Div(tok) => {
+            NoAssocTyBinOp::DivAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::DivAssign }
             }
-            NoAssocTyBinOp::Rem(tok) => {
+            NoAssocTyBinOp::RemAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::RemAssign }
             }
-            NoAssocTyBinOp::Shl(tok) => {
+            NoAssocTyBinOp::ShlAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::ShlAssign }
             }
-            NoAssocTyBinOp::Shr(tok) => {
+            NoAssocTyBinOp::ShrAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::ShrAssign }
             }
-            NoAssocTyBinOp::BitAnd(tok) => {
+            NoAssocTyBinOp::BitAndAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::BitAndAssign }
             }
-            NoAssocTyBinOp::BitXor(tok) => {
+            NoAssocTyBinOp::BitXorAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::BitXorAssign }
             }
-            NoAssocTyBinOp::BitOr(tok) => {
+            NoAssocTyBinOp::BitOrAssign(tok) => {
                 parse_quote_spanned! { tok.span() => ::core::ops::BitOrAssign }
+            }
+            NoAssocTyBinOp::PartialEqEq(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialEq }
+            }
+            NoAssocTyBinOp::PartialEqNe(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialEq }
+            }
+            NoAssocTyBinOp::PartialOrdCmp(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialOrd }
+            }
+            NoAssocTyBinOp::PartialOrdLt(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialOrd }
+            }
+            NoAssocTyBinOp::PartialOrdGt(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialOrd }
+            }
+            NoAssocTyBinOp::PartialOrdLe(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialOrd }
+            }
+            NoAssocTyBinOp::PartialOrdGe(tok) => {
+                parse_quote_spanned! { tok.span() => ::core::cmp::PartialOrd }
             }
         }
     }

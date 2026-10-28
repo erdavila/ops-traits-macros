@@ -32,6 +32,7 @@ use crate::output::{qualified_type, where_predicate, where_predicate_with_assoc}
     UnOp := '*' | '-' | '!'
     CombineBinOp := '+' | '-' | '*' | '/' | '%' | '<<' | '>>' | '&' | '^' | '|'
     NoAssocTyBinOp := '+=' | '-=' | '*=' | '/=' | '%=' | '<<=' | '>>=' | '&=' | '^=' | '|='
+                    | '<=>' | '<' | '>' | '<=' | '>=' | '==' | '!='
 
     BinOp := CombineBinOp | NoAssocTyBinOp
 */

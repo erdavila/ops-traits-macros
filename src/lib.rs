@@ -45,24 +45,24 @@ pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let mut item = parse_macro_input!(item as Item);
-    let where_clause = match &mut item {
-        // Item::Enum(item_enum) => todo!(),
-        Item::Fn(item_fn) => Ok(item_fn.sig.generics.make_where_clause()),
-        // Item::Impl(item_impl) => todo!(),
-        // Item::Struct(item_struct) => todo!(),
-        // Item::Trait(item_trait) => todo!(),
-        // Item::Type(item_type) => todo!(),
-        // Item::Union(item_union) => todo!(),
+    let item_generics = match &mut item {
+        Item::Enum(item_enum) => Ok(&mut item_enum.generics),
+        Item::Fn(item_fn) => Ok(&mut item_fn.sig.generics),
+        Item::Impl(item_impl) => Ok(&mut item_impl.generics),
+        Item::Struct(item_struct) => Ok(&mut item_struct.generics),
+        Item::Trait(item_trait) => Ok(&mut item_trait.generics),
+        Item::Type(item_type) => Ok(&mut item_type.generics),
+        Item::Union(item_union) => Ok(&mut item_union.generics),
         item => Err(Error::new_spanned(
             item,
-            "the ops_bounds macro is only supported in functions",
+            "the ops_bounds macro is only supported in the following items: enum, fn, impl, struct, trait, type, union",
         )),
     };
 
-    zip_combine_results(where_clause, ops_bounds)
-        .map(|(where_clause, bounds)| {
+    zip_combine_results(item_generics, ops_bounds)
+        .map(|(gens, bounds)| {
             let predicates = ops_bounds_to_where_predicates(bounds);
-            where_clause.predicates.extend(predicates);
+            gens.make_where_clause().predicates.extend(predicates);
         })
         .map_or_else(Error::into_compile_error, |()| item.into_token_stream())
         .into()

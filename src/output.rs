@@ -2,10 +2,10 @@ use syn::punctuated::Punctuated;
 use syn::{GenericArgument, PathArguments, Token, Type, WherePredicate, parse_quote};
 
 use crate::operator::AssocTyOp;
-use crate::{AssocTyPredicate, Op, RightOperand, Term};
+use crate::{AssocTyPredicate, Expression, Op, RightOperand};
 
 pub(crate) fn where_predicate(
-    left: Term,
+    left: Expression,
     op: &impl Op,
     right: Option<RightOperand>,
 ) -> WherePredicate {
@@ -14,7 +14,7 @@ pub(crate) fn where_predicate(
 }
 
 pub(crate) fn where_predicate_with_assoc(
-    left: Term,
+    left: Expression,
     op: &impl AssocTyOp,
     right: Option<RightOperand>,
     assoc: AssocTyPredicate,
@@ -24,14 +24,14 @@ pub(crate) fn where_predicate_with_assoc(
 }
 
 /*
- *  | WherePredicate------------------------------------------------------------ |
- *  | Type | ':' | TypeParamBound----------------------------------------------- |
- *  |      |     | Path | PathArguments----------------------------------------- |
- *  |      |     |      | '<' | GenericArgument | ',' | GenericArgument--- | '>' |
- *  |      |     |      |     | Type----------- |     | Ident | '=' | Type |     |
+ *  | WherePredicate------------------------------------------------------------------ |
+ *  | Primary | ':' | TypeParamBound-------------------------------------------------- |
+ *  |         |     | Path | PathArguments-------------------------------------------- |
+ *  |         |     |      | '<' | GenericArgument | ',' | GenericArgument------ | '>' |
+ *  |         |     |      |     | Primary-------- |     | Ident | '=' | Primary |     |
  */
 fn where_predicate_with_path_args(
-    left: Term,
+    left: Expression,
     op: &impl Op,
     path_args: &PathArguments,
 ) -> WherePredicate {
@@ -45,7 +45,11 @@ fn where_predicate_with_path_args(
  *  | Type--------------------------------------------------------- |
  *  | '<' | Type | 'as' | Path | PathArguments | '>' | '::' | Ident |
  */
-pub(crate) fn qualified_type(left: Term, op: &impl AssocTyOp, right: Option<RightOperand>) -> Type {
+pub(crate) fn qualified_type(
+    left: Expression,
+    op: &impl AssocTyOp,
+    right: Option<RightOperand>,
+) -> Type {
     let bounded_ty = left.into_type();
     let trait_path = op.trait_path();
     let path_args = path_arguments(right, None);
@@ -60,16 +64,16 @@ fn path_arguments(
 ) -> PathArguments {
     let rhs_arg: Option<GenericArgument> = right.and_then(|right| match right {
         RightOperand::SelfRhs(_) => None,
-        RightOperand::Term(term) => {
-            let rhs = term.into_type();
+        RightOperand::Expression(expr) => {
+            let rhs = expr.into_type();
             Some(parse_quote! { #rhs })
         }
     });
 
     let assoc_arg: Option<GenericArgument> = assoc.map(|(op, assoc)| {
         let assoc_name = op.assoc_type_name();
-        let AssocTyPredicate { eq_token, term } = assoc;
-        let assoc_pred = term.into_type();
+        let AssocTyPredicate { eq_token, expr } = assoc;
+        let assoc_pred = expr.into_type();
         parse_quote! { #assoc_name #eq_token #assoc_pred }
     });
 

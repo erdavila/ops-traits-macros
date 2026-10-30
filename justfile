@@ -1,4 +1,4 @@
-default: fmt test clippy
+default: fmt test clippy doc
 
 [no-cd]
 check *ARGS:

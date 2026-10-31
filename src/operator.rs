@@ -72,6 +72,8 @@ macro_rules! impl_assoc_ty_op {
     };
 }
 
+// Unary operators that produce a new instance value.
+// Their traits have an associated type for the resulting value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum UnOp {
     Deref(Token![*]),
@@ -108,6 +110,8 @@ impl_assoc_ty_op! {
     }
 }
 
+// Binary operators that combine two values into a new one.
+// Their traits have an associated type for the resulting value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum CombineBinOp {
     BitOr(Token![|]),
@@ -185,6 +189,8 @@ impl_assoc_ty_op! {
     }
 }
 
+// Binary operators that don't output a new value instance.
+// Their traits don't have an associated type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum NoAssocTyBinOp {
     BitOrAssign(Token![|=]),

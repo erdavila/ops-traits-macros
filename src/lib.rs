@@ -268,18 +268,18 @@ mod operator;
 mod output;
 mod parse;
 
-use std::collections::{HashMap, HashSet};
-
 use proc_macro::TokenStream;
 use quote::ToTokens as _;
 use syn::parse::Parser as _;
 use syn::punctuated::Punctuated;
-use syn::{Error, Item, Result, Token, WherePredicate, parse_macro_input};
+use syn::{Error, Item, Result, Token, parse_macro_input};
 
 use crate::grammar::{NoAssocTyOpOpsBound, OpsBound, OpsExpr};
 use crate::operator::{CombineBinOp, NoAssocTyBinOp, Op, UnOp};
-use crate::output::{qualified_type, where_predicate, where_predicate_with_assoc};
+use crate::output::{ops_bounds_to_where_predicates, ops_expr_to_type};
 use crate::parse::TryParse;
+
+type OpsBounds = Punctuated<OpsBound, Token![,]>;
 
 /// A macro attribute that allows expressing [`std::ops`] trait bounds in a mathematical expression
 /// format.
@@ -436,7 +436,7 @@ use crate::parse::TryParse;
 #[proc_macro_attribute]
 pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ops_bounds = {
-        let parser = Punctuated::<OpsBound, Token![,]>::parse_terminated;
+        let parser = OpsBounds::parse_terminated;
         parser.parse(attr)
     };
 
@@ -464,59 +464,6 @@ pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-fn ops_bounds_to_where_predicates(
-    bounds: impl IntoIterator<Item = OpsBound>,
-) -> impl Iterator<Item = WherePredicate> {
-    let mut unique_assoc_ty_op_bounds = HashMap::new();
-    let mut unique_no_assoc_ty_op_bounds = HashSet::new();
-
-    for bound in bounds {
-        for sub_oper in bound.sub_opers() {
-            unique_assoc_ty_op_bounds
-                .entry(sub_oper)
-                .or_insert(HashSet::new());
-        }
-
-        match bound {
-            OpsBound::AssocTyOp(bound) => {
-                let assocs = unique_assoc_ty_op_bounds
-                    .entry(bound.oper)
-                    .or_insert(HashSet::new());
-
-                if let Some(assoc) = bound.assoc {
-                    assocs.insert(assoc);
-                }
-            }
-            OpsBound::NoAssocTyOp(bound) => {
-                unique_no_assoc_ty_op_bounds.insert(bound);
-            }
-        }
-    }
-
-    let assoc_ty_op_predicates =
-        unique_assoc_ty_op_bounds
-            .into_iter()
-            .flat_map(|(oper, assocs)| {
-                // Ensure there is at least one bound.
-                let no_assocs = assocs
-                    .is_empty()
-                    .then(|| oper.clone().into_where_predicate())
-                    .into_iter();
-
-                let with_assocs = assocs
-                    .into_iter()
-                    .map(move |assoc| oper.clone().into_where_predicate_with_assoc(assoc));
-
-                no_assocs.chain(with_assocs)
-            });
-
-    let no_assoc_ty_op_predicates = unique_no_assoc_ty_op_bounds
-        .into_iter()
-        .map(NoAssocTyOpOpsBound::into_where_predicate);
-
-    assoc_ty_op_predicates.chain(no_assoc_ty_op_predicates)
-}
-
 /// Allows expressing the output types of [`std::ops`] operations in a mathematical expression
 /// format.
 ///
@@ -525,10 +472,8 @@ fn ops_bounds_to_where_predicates(
 /// See the [crate] docs for basic information and examples.
 #[proc_macro]
 pub fn ops_type(item: TokenStream) -> TokenStream {
-    parse_macro_input!(item as OpsExpr)
-        .into_type()
-        .into_token_stream()
-        .into()
+    let ops_expr = parse_macro_input!(item as OpsExpr);
+    ops_expr_to_type(ops_expr).into_token_stream().into()
 }
 
 fn zip_combine_results<T, U>(r1: Result<T>, r2: Result<U>) -> Result<(T, U)> {

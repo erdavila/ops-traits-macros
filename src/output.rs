@@ -1,8 +1,9 @@
 use syn::punctuated::Punctuated;
 use syn::{GenericArgument, PathArguments, Token, Type, WherePredicate, parse_quote};
 
+use crate::Op;
+use crate::grammar::{AssocTyPredicate, Expression, RightOperand};
 use crate::operator::AssocTyOp;
-use crate::{AssocTyPredicate, Expression, Op, RightOperand};
 
 pub(crate) fn where_predicate(
     left: Expression,

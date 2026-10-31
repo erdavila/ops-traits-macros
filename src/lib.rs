@@ -238,6 +238,7 @@ use syn::{Error, Item, Result, Token, Type, WherePredicate, parse_macro_input};
 
 use crate::operator::{CombineBinOp, NoAssocTyBinOp, Op, UnOp};
 use crate::output::{qualified_type, where_predicate, where_predicate_with_assoc};
+use crate::parse::TryParse;
 
 /*
  *  # Input grammar
@@ -669,7 +670,15 @@ struct AssocTyPredicate {
     expr: Expression,
 }
 impl AssocTyPredicate {
-    fn try_parse(input: ParseStream) -> Result<Option<Self>> {
+    fn all_opers(&self) -> impl Iterator<Item = Operation> + use<> {
+        self.expr.all_opers()
+    }
+}
+impl TryParse for AssocTyPredicate {
+    fn try_parse(input: ParseStream) -> Result<Option<Self>>
+    where
+        Self: Sized,
+    {
         if input.peek(Token![=]) {
             Ok(Some(AssocTyPredicate {
                 eq_token: input.parse()?,
@@ -678,10 +687,6 @@ impl AssocTyPredicate {
         } else {
             Ok(None)
         }
-    }
-
-    fn all_opers(&self) -> impl Iterator<Item = Operation> + use<> {
-        self.expr.all_opers()
     }
 }
 
@@ -874,6 +879,12 @@ mod parse {
     use crate::{
         BinaryOperation, CombineBinOp, Expression, Primary, RightOperand, UnOp, UnaryOperation,
     };
+
+    pub(crate) trait TryParse {
+        fn try_parse(input: ParseStream) -> Result<Option<Self>>
+        where
+            Self: Sized;
+    }
 
     pub(crate) fn expression(input: ParseStream) -> Result<Expression> {
         bitor_oper(input)

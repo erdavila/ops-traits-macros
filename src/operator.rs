@@ -1,8 +1,9 @@
+use proc_macro2::Span;
 use syn::parse::ParseStream;
 use syn::spanned::Spanned as _;
-use syn::{Ident, Path, Result, Token, custom_punctuation, parse_quote_spanned};
+use syn::{Error, Ident, Path, Result, Token, custom_punctuation, parse_quote_spanned};
 
-custom_punctuation!(Cmp, <=>);
+use crate::TryParse;
 
 macro_rules! try_parse_token {
     (
@@ -26,7 +27,7 @@ macro_rules! try_parse_token {
             } else
         )+
         {
-            Ok(None)
+            Ok::<_, Error>(None)
         }
     }};
 
@@ -77,8 +78,11 @@ pub(crate) enum UnOp {
     Neg(Token![-]),
     Not(Token![!]),
 }
-impl UnOp {
-    pub(crate) fn try_parse(input: ParseStream) -> Result<Option<Self>> {
+impl TryParse for UnOp {
+    fn try_parse(input: ParseStream) -> Result<Option<Self>>
+    where
+        Self: Sized,
+    {
         try_parse_token!(
             input,
             UnOp {
@@ -193,16 +197,25 @@ pub(crate) enum NoAssocTyBinOp {
     MulAssign(Token![*=]),
     DivAssign(Token![/=]),
     RemAssign(Token![%=]),
-    PartialEqEq(Token![==]),
-    PartialEqNe(Token![!=]),
-    PartialOrdLt(Token![<]),
-    PartialOrdGt(Token![>]),
-    PartialOrdLe(Token![<=]),
-    PartialOrdGe(Token![>=]),
-    PartialOrdCmp(Cmp),
+    PartialEq(PartialEqOp),
+    PartialOrd(PartialOrdOp),
 }
-impl NoAssocTyBinOp {
-    pub(crate) fn try_parse(input: ParseStream) -> Result<Option<Self>> {
+impl TryParse for NoAssocTyBinOp {
+    fn try_parse(input: ParseStream) -> Result<Option<Self>>
+    where
+        Self: Sized,
+    {
+        macro_rules! try_parse_wrap_return {
+            ($variant:ident) => {
+                let op = TryParse::try_parse(input)?;
+                if op.is_some() {
+                    return Ok(op.map(NoAssocTyBinOp::$variant));
+                }
+            };
+        }
+
+        try_parse_wrap_return!(PartialEq);
+        try_parse_wrap_return!(PartialOrd);
         try_parse_token!(
             input,
             NoAssocTyBinOp {
@@ -216,13 +229,6 @@ impl NoAssocTyBinOp {
                 [*=] => MulAssign,
                 [/=] => DivAssign,
                 [%=] => RemAssign,
-                [==] => PartialEqEq,
-                [!=] => PartialEqNe,
-                [<] except [<<], [<=] => PartialOrdLt,
-                [>] except [>>], [>=] => PartialOrdGt,
-                [<=] except Cmp => PartialOrdLe,
-                [>=] => PartialOrdGe,
-                Cmp => PartialOrdCmp,
             }
         )
     }
@@ -239,12 +245,74 @@ impl_op! {
         MulAssign => ::core::ops::MulAssign,
         DivAssign => ::core::ops::DivAssign,
         RemAssign => ::core::ops::RemAssign,
-        PartialEqEq => ::core::cmp::PartialEq,
-        PartialEqNe => ::core::cmp::PartialEq,
-        PartialOrdLt => ::core::cmp::PartialOrd,
-        PartialOrdGt => ::core::cmp::PartialOrd,
-        PartialOrdLe => ::core::cmp::PartialOrd,
-        PartialOrdGe => ::core::cmp::PartialOrd,
-        PartialOrdCmp => ::core::cmp::PartialOrd,
+        PartialEq => ::core::cmp::PartialEq,
+        PartialOrd => ::core::cmp::PartialOrd,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum PartialEqOp {
+    Eq(Token![==]),
+    Ne(Token![!=]),
+}
+impl PartialEqOp {
+    fn span(&self) -> Span {
+        match self {
+            PartialEqOp::Eq(tok) => tok.span(),
+            PartialEqOp::Ne(tok) => tok.span(),
+        }
+    }
+}
+impl TryParse for PartialEqOp {
+    fn try_parse(input: ParseStream) -> Result<Option<Self>>
+    where
+        Self: Sized,
+    {
+        try_parse_token!(
+            input,
+            PartialEqOp {
+                [==] => Eq,
+                [!=] => Ne,
+            }
+        )
+    }
+}
+
+custom_punctuation!(Cmp, <=>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum PartialOrdOp {
+    Lt(Token![<]),
+    Gt(Token![>]),
+    Le(Token![<=]),
+    Ge(Token![>=]),
+    Cmp(Cmp),
+}
+impl PartialOrdOp {
+    fn span(&self) -> Span {
+        match self {
+            PartialOrdOp::Lt(tok) => tok.span(),
+            PartialOrdOp::Gt(tok) => tok.span(),
+            PartialOrdOp::Le(tok) => tok.span(),
+            PartialOrdOp::Ge(tok) => tok.span(),
+            PartialOrdOp::Cmp(tok) => tok.span(),
+        }
+    }
+}
+impl TryParse for PartialOrdOp {
+    fn try_parse(input: ParseStream) -> Result<Option<Self>>
+    where
+        Self: Sized,
+    {
+        try_parse_token!(
+            input,
+            PartialOrdOp {
+                [<] except [<<], [<=] => Lt,
+                [>] except [>>], [>=] => Gt,
+                [<=] except Cmp => Le,
+                [>=] => Ge,
+                Cmp => Cmp,
+            }
+        )
     }
 }

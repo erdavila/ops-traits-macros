@@ -1,7 +1,14 @@
 [package]
 name = "ops-traits-macros"
+description = "Macros to simplify expressing std::ops trait bounds and types."
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/erdavila/ops-traits-macros"
+readme = "README.md"
+license-file = "LICENSE"
+keywords = ["macros", "trait-bounds", "math", "ops", "operators"]
+categories = ["mathematics", "rust-patterns"]
+exclude = ["/justfile"]
 
 [lib]
 proc-macro = true

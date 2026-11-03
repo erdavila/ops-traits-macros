@@ -289,3 +289,19 @@ fn standard_type() {
     let result = f(&[7], 0);
     assert_eq!(result, &7);
 }
+
+#[test]
+fn standard_bound() {
+    #[ops_bounds(
+        T * T: Clone + Into<T>,
+        T + T,
+    )]
+    fn calculate<T>(x: T, y: T) -> ops_type!(T + T) {
+        let val1 = x * y;
+        let val2 = val1.clone();
+        val1.into() + val2.into()
+    }
+
+    let result = calculate(3, 4);
+    assert_eq!(result, 24);
+}

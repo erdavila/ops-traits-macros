@@ -3,6 +3,7 @@
  *
  *  OpsBound := Operation ('=' Expression³)?
  *            | Expression³ NoAssocTyBinOp RightOperand³
+ *            | Expression³ ':' TypeParamBound ('+' TypeParamBound)*
  *  OpsExpr := Expression³
  *
  *  Operation := Expression³   # Must not reduce to Type.
@@ -32,11 +33,12 @@
  *
  *  # Grammar with types used during parsing
  *
- *  OpsBound := AssocTyOpOpsBound | NoAssocTyOpOpsBound
+ *  OpsBound := AssocTyOpOpsBound | NoAssocTyOpOpsBound | ExprBound
  *  OpsExpr := Expression³
  *
  *  AssocTyOpOpsBound := Operation AssocTyPredicate?
  *  NoAssocTyOpOpsBound := BinaryOperation<NoAssocTyBinOp>³˒³
+ *  ExprBound := Expression³ ':' TypeParamBound ('+' TypeParamBound)*
  *
  *  Operation := Expression³   # Must reduce to UnaryOperation or BinaryOperation<CombineBinOp>.
  *  UnaryOperation := UnOp Expression⁹
@@ -53,8 +55,9 @@
  */
 
 use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
 use syn::token::Paren;
-use syn::{Result, Token, Type};
+use syn::{Result, Token, Type, TypeParamBound};
 
 use crate::{CombineBinOp, NoAssocTyBinOp, TryParse, UnOp, parse};
 
@@ -89,7 +92,12 @@ use crate::{CombineBinOp, NoAssocTyBinOp, TryParse, UnOp, parse};
  *           -> BinaryOperation<NoAssocTyBinOp>³˒³
  *           -> Expression³ NoAssocTyBinOp RightOperand³
  *           -> left:Expression³ binop:NoAssocTyBinOp right:Expression³
- *  => left ':' trait(binop) '<' right '>')?
+ *  => left ':' trait(binop) '<' right '>'
+ *
+ *  OpsBound -> NoAssocTyOpOpsBound
+ *           -> ExprBound
+ *           -> bounded:Expression³ ':' bounds:(TypeParamBound ('+' TypeParamBound)*))
+ *  => bounded ':' bounds
  */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum OpsBound {
@@ -97,16 +105,25 @@ pub(crate) enum OpsBound {
     AssocTyOp(AssocTyOpOpsBound),
     // OpsBound := Expression³ NoAssocTyBinOp RightOperand³
     NoAssocTyOp(NoAssocTyOpOpsBound),
+    // OpsBound := Expression³ ':' TypeParamBound ('+' TypeParamBound)*
+    Expr(ExprBound),
 }
 impl Parse for OpsBound {
     fn parse(input: ParseStream) -> Result<Self> {
-        let left = parse::expression(input)?;
+        let expr = parse::expression(input)?;
 
-        if let Some(binop) = NoAssocTyBinOp::try_parse(input)? {
+        if input.peek(Token![:]) {
+            // OpsBound := Expression³ ':' TypeParamBound ('+' TypeParamBound)*
+            Ok(OpsBound::Expr(ExprBound {
+                bounded: expr,
+                colon: input.parse()?,
+                std_bounds: Punctuated::parse_separated_nonempty(input)?,
+            }))
+        } else if let Some(binop) = NoAssocTyBinOp::try_parse(input)? {
             // OpsBound := Expression³ NoAssocTyBinOp RightOperand³
             Ok(OpsBound::NoAssocTyOp(NoAssocTyOpOpsBound(
                 BinaryOperation {
-                    left: Box::new(left),
+                    left: Box::new(expr),
                     binop,
                     right: RightOperand::parse_with(input, parse::expression)?,
                 },
@@ -114,7 +131,7 @@ impl Parse for OpsBound {
         } else {
             // OpsBound := Operation ('=' Expression³)?
             Ok(OpsBound::AssocTyOp(AssocTyOpOpsBound {
-                oper: left.into_oper(input)?,
+                oper: expr.into_oper(input)?,
                 assoc: AssocTyPredicate::try_parse(input)?,
             }))
         }
@@ -133,6 +150,15 @@ pub(crate) struct AssocTyOpOpsBound {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // NoAssocTyOpOpsBound := BinaryOperation<NoAssocTyBinOp>³˒³
 pub(crate) struct NoAssocTyOpOpsBound(pub(crate) BinaryOperation<NoAssocTyBinOp>);
+
+// A standard Rust bound applied to the type of an expression.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// Expression³ ':' TypeParamBound ('+' TypeParamBound)*
+pub(crate) struct ExprBound {
+    pub(crate) bounded: Expression,
+    colon: Token![:],
+    pub(crate) std_bounds: Punctuated<TypeParamBound, Token![+]>,
+}
 
 /*
  * OpsExpr -> Expression³

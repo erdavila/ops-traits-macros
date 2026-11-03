@@ -8,8 +8,8 @@ use syn::{
 };
 
 use crate::grammar::{
-    AssocTyOpOpsBound, AssocTyPredicate, BinaryOperation, Expression, Operation, Primary,
-    RightOperand, UnaryOperation,
+    AssocTyOpOpsBound, AssocTyPredicate, BinaryOperation, ExprBound, Expression, Operation,
+    Primary, RightOperand, UnaryOperation,
 };
 use crate::operator::AssocTyOp;
 use crate::{CombineBinOp, NoAssocTyOpOpsBound, Op, OpsBound, OpsExpr, UnOp};
@@ -50,16 +50,32 @@ impl NoAssocTyOpOpsBound {
     }
 }
 
+impl ExprBound {
+    fn into_expr_bound_predicates(
+        self,
+    ) -> ExprBoundPredicates<impl Iterator<Item = OperationPredicate>> {
+        let bounded_preds = self.bounded.into_predicates();
+
+        ExprBoundPredicates {
+            self_pred: ExprBoundPredicate {
+                bounded_ty: bounded_preds.self_pred.clone().into_type(),
+                std_bounds: self.std_bounds,
+            },
+            sub_preds: bounded_preds.into_iter(),
+        }
+    }
+}
+
 impl Operation {
     fn into_predicates(self) -> OperationPredicates<impl Iterator<Item = OperationPredicate>> {
         match self {
             Operation::Unary(un_oper) => {
                 let preds = un_oper.into_predicates();
-                preds.map_sub_preds(AlternativeIterator::One)
+                preds.map_sub_preds(alt1)
             }
             Operation::Binary(bin_oper) => {
                 let preds = bin_oper.into_predicates();
-                preds.map_sub_preds(AlternativeIterator::Two)
+                preds.map_sub_preds(alt2)
             }
         }
     }
@@ -164,7 +180,7 @@ impl Expression {
         match self {
             Expression::Primary(primary) => {
                 let preds = primary.into_predicates();
-                preds.map_sub_preds(AlternativeIterator::One)
+                preds.map_sub_preds(alt1)
             }
             Expression::Operation(operation) => {
                 let oper_preds = operation.into_predicates();
@@ -173,7 +189,7 @@ impl Expression {
                     self_pred: ExpressionPredicate::Operation(oper_preds.self_pred),
                     sub_preds: oper_preds.sub_preds,
                 };
-                preds.map_sub_preds(AlternativeIterator::Two)
+                preds.map_sub_preds(alt2)
             }
         }
         .map_sub_preds(|sub_preds| Box::new(sub_preds) as _)
@@ -226,11 +242,11 @@ impl Primary {
                     self_pred: ExpressionPredicate::TypeOnly(*ty),
                     sub_preds: empty(),
                 };
-                preds.map_sub_preds(AlternativeIterator::One)
+                preds.map_sub_preds(alt1)
             }
             Primary::Expression { expr, .. } => {
                 let preds = expr.into_predicates();
-                preds.map_sub_preds(AlternativeIterator::Two)
+                preds.map_sub_preds(alt2)
             }
         }
     }
@@ -279,6 +295,7 @@ where
 
 type AssocTyOpPredicates<I> = Predicates<AssocTyOpPredicate, I>;
 type NoAssocTyOpPredicates<I> = Predicates<NoAssocTyOpPredicate, I>;
+type ExprBoundPredicates<I> = Predicates<ExprBoundPredicate, I>;
 type OperationPredicates<I> = Predicates<OperationPredicate, I>;
 type ExpressionPredicates<I> = Predicates<ExpressionPredicate, I>;
 
@@ -301,6 +318,12 @@ impl NoAssocTyOpPredicate {
             bound: Box::new(self.bound.with_assoc_ty_name(assoc_ty_name)),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ExprBoundPredicate {
+    bounded_ty: Type,
+    std_bounds: Punctuated<TypeParamBound, Token![+]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -379,6 +402,7 @@ pub(crate) fn ops_bounds_to_where_predicates(
     struct Bounds {
         with_assoc: IndexMap<AssocTyOpBound, IndexSet<Type>>,
         no_assoc: IndexSet<NoAssocTyOpBound>,
+        std: Punctuated<TypeParamBound, Token![+]>,
     }
 
     let mut unique_bounds: IndexMap<Type, Bounds> = IndexMap::new();
@@ -399,7 +423,7 @@ pub(crate) fn ops_bounds_to_where_predicates(
                     assocs.insert(assoc);
                 }
 
-                AlternativeIterator::One(preds.sub_preds)
+                alt1(alt1(preds.sub_preds))
             }
             OpsBound::NoAssocTyOp(ops_bound) => {
                 let preds = ops_bound.into_no_assoc_ty_op_predicates();
@@ -408,7 +432,19 @@ pub(crate) fn ops_bounds_to_where_predicates(
                 let bounds = unique_bounds.entry(bounded_ty).or_default();
                 bounds.no_assoc.insert(bound);
 
-                AlternativeIterator::Two(preds.sub_preds)
+                alt1(alt2(preds.sub_preds))
+            }
+            OpsBound::Expr(expr_bound) => {
+                let preds = expr_bound.into_expr_bound_predicates();
+
+                let ExprBoundPredicate {
+                    bounded_ty,
+                    std_bounds,
+                } = preds.self_pred;
+                let bounds = unique_bounds.entry(bounded_ty).or_default();
+                bounds.std.extend(std_bounds);
+
+                alt2(preds.sub_preds)
             }
         };
 
@@ -438,7 +474,12 @@ pub(crate) fn ops_bounds_to_where_predicates(
             .into_iter()
             .map(NoAssocTyOpBound::into_type_param_bound);
 
-        where_predicate(&bounded_ty, assoc_bounds.chain(no_assoc_bounds))
+        let std_bounds = bounds.std;
+
+        where_predicate(
+            &bounded_ty,
+            assoc_bounds.chain(no_assoc_bounds).chain(std_bounds),
+        )
     })
 }
 
@@ -538,11 +579,11 @@ fn path_arguments(rhs: Option<Type>, assoc: Option<(Ident, Type)>) -> PathArgume
     }
 }
 
-enum AlternativeIterator<I1, I2> {
+enum Alternative<I1, I2> {
     One(I1),
     Two(I2),
 }
-impl<I1, I2, T> Iterator for AlternativeIterator<I1, I2>
+impl<I1, I2, T> Iterator for Alternative<I1, I2>
 where
     I1: Iterator<Item = T>,
     I2: Iterator<Item = T>,
@@ -551,10 +592,17 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            AlternativeIterator::One(iter) => iter.next(),
-            AlternativeIterator::Two(iter) => iter.next(),
+            Alternative::One(iter) => iter.next(),
+            Alternative::Two(iter) => iter.next(),
         }
     }
+}
+
+fn alt1<T1, T2>(value: T1) -> Alternative<T1, T2> {
+    Alternative::One(value)
+}
+fn alt2<T1, T2>(value: T2) -> Alternative<T1, T2> {
+    Alternative::Two(value)
 }
 
 #[cfg(test)]

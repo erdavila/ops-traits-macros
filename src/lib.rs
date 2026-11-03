@@ -438,6 +438,58 @@ type OpsBounds = Punctuated<OpsBound, Token![,]>;
 /// ```
 ///
 /// </details>
+///
+/// # Standard bounds
+///
+/// The macro attribute also accepts standard Rust bounds applied to expressions by using the `:`
+/// delimiter. This allows expressing all bounds on an item without writing a separate `where`
+/// clause.
+///
+/// The bounds to the right of `:` are parsed and applied to the type resulting from the expression
+/// on the left of `:`. The left-hand side expression is parsed in the same way as the [`ops_type!`]
+/// macro input (possibly being a simple Rust type), and any trait bounds required by operations in
+/// that expression are also generated automatically.
+///
+/// The `:` delimiter is top-level and cannot be combined with [associated type predicates] or the
+/// [comparison and assignment operators].
+///
+/// [associated type predicates]: #associated-type-predicate
+/// [comparison and assignment operators]: #comparison-and-assignment-operators
+///
+/// Example:
+///
+/// ```
+/// use ops_traits_macros::{ops_bounds, ops_type};
+///
+/// #[ops_bounds(
+///     T * T: Clone + Into<T>,
+///     T + T,
+/// )]
+/// fn calculate<T>(x: T, y: T) -> ops_type!(T + T) {
+///     let val1 = x * y;
+///     let val2 = val1.clone();
+///     val1.into() + val2.into()
+/// }
+/// ```
+///
+/// <details>
+///   <summary>The equivalent implementation without the macros.</summary>
+///
+/// ```
+/// use std::ops::{Add, Mul};
+///
+/// fn calculate<T>(x: T, y: T) -> <T as Add<T>>::Output
+/// where
+///     T: Mul<T> + Add<T>,
+///     <T as Mul<T>>::Output: Clone + Into<T>,
+/// {
+///     let val1 = x * y;
+///     let val2 = val1.clone();
+///     val1.into() + val2.into()
+/// }
+/// ```
+///
+/// </details>
 #[proc_macro_attribute]
 pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ops_bounds = {

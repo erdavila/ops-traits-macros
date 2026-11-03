@@ -92,24 +92,27 @@
 //!
 //! # Accepted types
 //!
-//! The macros accept not only generic type arguments, but _any_ Rust type.
+//! The macros accept not only generic type arguments, but _any_ Rust type. When a standard Rust
+//! type is parsed, its constituent parts (such as generic arguments) are parsed as standard types,
+//! not operation expressions. However, `ops_type!` can be nested inside them if an operation
+//! expression is needed:
 //!
 //! ```
 //! use std::ops::Index;
 //!
 //! use ops_traits_macros::{ops_bounds, ops_type};
 //!
-//! #[ops_bounds(<T as Index<usize>>::Output * U)]
-//! fn multiply_indexed_value<T, U>(
+//! #[ops_bounds(!I, <T as Index<ops_type!(!I)>>::Output * U)]
+//! fn multiply_indexed_value<T, U, I>(
 //!     x: T,
-//!     index: usize,
 //!     y: U,
-//! ) -> ops_type!(<T as Index<usize>>::Output * U)
+//!     i: I,
+//! ) -> ops_type!(<T as Index<ops_type!(!I)>>::Output * U)
 //! where
-//!     T: Index<usize>,
-//!     <T as Index<usize>>::Output: Copy,
+//!     T: Index<ops_type!(!I)>,
+//!     <T as Index<ops_type!(!I)>>::Output: Copy,
 //! {
-//!     x[index] * y
+//!     x[!i] * y
 //! }
 //! ```
 //!
@@ -117,18 +120,19 @@
 //!   <summary>The equivalent implementation without the macros.</summary>
 //!
 //! ```
-//! use std::ops::{Index, Mul};
+//! use std::ops::{Index, Mul, Not};
 //!
-//! fn multiply_indexed_value<T, U>(
+//! fn multiply_indexed_value<T, U, I>(
 //!     x: T,
-//!     index: usize,
 //!     y: U,
-//! ) -> <<T as Index<usize>>::Output as Mul<U>>::Output
+//!     i: I,
+//! ) -> <<T as Index<<I as Not>::Output>>::Output as Mul<U>>::Output
 //! where
-//!     T: Index<usize>,
-//!     <T as Index<usize>>::Output: Mul<U> + Copy,
+//!     I: Not,
+//!     T: Index<<I as Not>::Output>,
+//!     <T as Index<<I as Not>::Output>>::Output: Mul<U> + Copy,
 //! {
-//!     x[index] * y
+//!     x[!i] * y
 //! }
 //! ```
 //!
@@ -373,7 +377,8 @@ type OpsBounds = Punctuated<OpsBound, Token![,]>;
 /// represent a general comparison bound.
 ///
 /// All of the additional operators have lower precedence than [the other
-/// operators](crate#supported-operators), and each expression can contain at most one of them.
+/// operators](crate#supported-operators), and they must not be in a sub-expression (such as in `(T
+/// == U) * V`). Additionally, each expression can contain at most one of the additional operators.
 ///
 /// ```
 /// use ops_traits_macros::ops_bounds;

@@ -1,5 +1,5 @@
 // Import with different names so that the macro doesn't make use of the imports.
-use std::ops::{Neg as Neg_, Sub as Sub_};
+use std::ops::{Index, Neg as Neg_, Sub as Sub_};
 
 use ops_traits_macros::{ops_bounds, ops_type};
 
@@ -275,4 +275,17 @@ fn deeper_level() {
 
     let result = calculate(2, 3, 4);
     assert_eq!(result, 6);
+}
+
+#[test]
+fn standard_type() {
+    fn f<T>(x: &T, index: usize) -> ops_type!(&<T as Index<usize>>::Output)
+    where
+        T: Index<usize>,
+    {
+        &x[index]
+    }
+
+    let result = f(&[7], 0);
+    assert_eq!(result, &7);
 }

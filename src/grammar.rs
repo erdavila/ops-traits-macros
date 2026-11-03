@@ -3,7 +3,7 @@
  *
  *  OpsBound := Operation ('=' Expression³)?
  *            | Expression³ NoAssocTyBinOp RightOperand³
- *  OpsExpr := Operation
+ *  OpsExpr := Expression³
  *
  *  Operation := Expression³   # Must not reduce to Type.
  *
@@ -33,7 +33,7 @@
  *  # Grammar with types used during parsing
  *
  *  OpsBound := AssocTyOpOpsBound | NoAssocTyOpOpsBound
- *  OpsExpr := Operation
+ *  OpsExpr := Expression³
  *
  *  AssocTyOpOpsBound := Operation AssocTyPredicate?
  *  NoAssocTyOpOpsBound := BinaryOperation<NoAssocTyBinOp>³˒³
@@ -135,28 +135,38 @@ pub(crate) struct AssocTyOpOpsBound {
 pub(crate) struct NoAssocTyOpOpsBound(pub(crate) BinaryOperation<NoAssocTyBinOp>);
 
 /*
- * OpsExpr -> Operation
+ * OpsExpr -> Expression³
  *         -> UnaryOperation
  *         -> unop:UnOp operand:Expression⁹
  *  => '<' operand 'as' trait(unop) '>' '::' assoc_type_name(unop)
  *
- * OpsExpr -> Operation
+ * OpsExpr -> Expression³
  *         -> BinaryOperation<CombineBinOp>
  *         -> Expression CombineBinOp RightOperand
  *         -> left:Expression binop:CombineBinOp '_'
  *  => '<' left 'as' trait(binop) '>' '::' assoc_type_name(binop)
  *
- * OpsExpr -> Operation
+ * OpsExpr -> Expression³
  *         -> BinaryOperation<CombineBinOp>
  *         -> left:Expression binop:CombineBinOp right:Expression
  *  => '<' left 'as' trait(binop) '<' right '>' '>' '::' assoc_type_name(binop)
+ *
+ * OpsExpr -> Expression³
+ *         -> Primary
+ *         -> type:Type
+ *  => type
+ *
+ * OpsExpr -> Expression³
+ *         -> Primary
+ *         -> '(' Expression³ ')'
+ *         -> ...
  */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct OpsExpr(pub(crate) Operation);
+pub(crate) struct OpsExpr(pub(crate) Expression);
 impl Parse for OpsExpr {
     fn parse(input: ParseStream) -> Result<Self> {
         let expr = parse::expression(input)?;
-        Ok(OpsExpr(expr.into_oper(input)?))
+        Ok(OpsExpr(expr))
     }
 }
 

@@ -474,6 +474,10 @@ pub fn ops_bounds(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The macro can be used in _any_ position where a type is accepted.
 ///
+/// The macro also accepts standard Rust types that do not contain operations (such as
+/// `ops_type!(&<T as Index<usize>>::Output)`), in which case it simply outputs the type without any
+/// additional processing.
+///
 /// See the [crate] docs for basic information and examples.
 #[proc_macro]
 pub fn ops_type(item: TokenStream) -> TokenStream {
@@ -490,5 +494,23 @@ fn zip_combine_results<T, U>(r1: Result<T>, r2: Result<U>) -> Result<(T, U)> {
             e1.combine(e2);
             Err(e1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::{Type, parse_quote, parse2};
+
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "unexpected end of input")]
+    fn ops_bounds_regular_type() {
+        let ty: Type = parse_quote! { &<T as Index<usize>>::Output };
+        let tokens = ty.into_token_stream();
+
+        let result: Result<OpsBound> = parse2(tokens);
+
+        result.unwrap();
     }
 }

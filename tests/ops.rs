@@ -1,4 +1,24 @@
+mod sqr;
+
 use ops_traits_macros::{ops_bounds, ops_type};
+
+use crate::sqr::Sqr;
+
+#[test]
+fn sqr() {
+    #[ops_bounds(T^2)]
+    fn f<T>(x: T) -> ops_type!(T ^ 2) {
+        x.sqr()
+    }
+
+    #[ops_bounds(T^2 = O)]
+    fn g<T, O>(x: T) -> O {
+        x.sqr()
+    }
+
+    assert_eq!(f(3), 9);
+    assert_eq!(g(3), 9);
+}
 
 #[test]
 fn deref() {

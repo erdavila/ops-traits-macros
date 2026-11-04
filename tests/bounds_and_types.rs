@@ -1,7 +1,11 @@
+mod sqr;
+
 // Import with different names so that the macro doesn't make use of the imports.
 use std::ops::{Index, Neg as Neg_, Sub as Sub_};
 
 use ops_traits_macros::{ops_bounds, ops_type};
+
+use crate::sqr::Sqr;
 
 #[test]
 fn empty() {
@@ -12,6 +16,72 @@ fn empty() {
 
     let result = identity(7);
     assert_eq!(result, 7);
+}
+
+#[test]
+fn sqrop() {
+    #[ops_bounds(T^2)]
+    fn sqr<T>(x: T) -> ops_type!(T ^ 2) {
+        x.sqr()
+    }
+
+    let result = sqr(3);
+    assert_eq!(result, 9);
+}
+
+#[test]
+fn sqrop_with_output() {
+    #[ops_bounds(T^2 = O)]
+    fn sqr<T, O>(x: T) -> O {
+        x.sqr()
+    }
+
+    let result = sqr(3);
+    assert_eq!(result, 9);
+}
+
+#[test]
+fn sqrop_with_nested_sqrop() {
+    #[ops_bounds((T^2)^2)]
+    fn double_squared<T>(x: T) -> ops_type!((T ^ 2) ^ 2) {
+        x.sqr().sqr()
+    }
+
+    let result = double_squared(2);
+    assert_eq!(result, 16);
+}
+
+#[test]
+fn sqrop_with_nested_unop() {
+    #[ops_bounds((-T)^2)]
+    fn calculate<T>(x: T) -> ops_type!((-T) ^ 2) {
+        (-x).sqr()
+    }
+
+    let result = calculate(3);
+    assert_eq!(result, 9);
+}
+
+#[test]
+fn sqrop_with_nested_binop() {
+    #[ops_bounds((T * U)^2)]
+    fn calculate<T, U>(x: T, y: U) -> ops_type!((T * U) ^ 2) {
+        (x * y).sqr()
+    }
+
+    let result = calculate(2, 3);
+    assert_eq!(result, 36);
+}
+
+#[test]
+fn sqrop_with_nested_output() {
+    #[ops_bounds((T * U)^2 = (U * T))]
+    fn calculate<T, U>(x: T, y: U) -> ops_type!(U * T) {
+        (x * y).sqr()
+    }
+
+    let result = calculate(2, 3);
+    assert_eq!(result, 36);
 }
 
 #[test]
@@ -34,6 +104,17 @@ fn unop_with_output() {
 
     let result = neg(2);
     assert_eq!(result, -2);
+}
+
+#[test]
+fn unop_with_nested_sqrop() {
+    #[ops_bounds(-(T^2))]
+    fn calculate<T>(x: T) -> ops_type!(-(T ^ 2)) {
+        -(x.sqr())
+    }
+
+    let result = calculate(3);
+    assert_eq!(result, -9);
 }
 
 #[test]
@@ -253,7 +334,7 @@ fn binop_with_nested_output() {
 }
 
 #[test]
-fn parenthesized_non_expr() {
+fn parenthesized_non_operation() {
     #[ops_bounds((T) * (U))]
     fn calculate<T, U>(x: T, y: U) -> ops_type!(T * U) {
         x * y

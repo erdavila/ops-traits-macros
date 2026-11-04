@@ -1,6 +1,10 @@
 #![expect(clippy::precedence)]
 
+mod sqr;
+
 use ops_traits_macros::{ops_bounds, ops_type};
+
+use crate::sqr::Sqr;
 
 /*
  *  Precedence levels:
@@ -13,6 +17,7 @@ use ops_traits_macros::{ops_bounds, ops_type};
  *      7:  +  -
  *      8:  *  /  %
  *      9:  *  -  !  (all unary)
+ *      10: ^2
  *
  *  Notes:
  *    - The macros handle the levels 1 and 2 operators the same way. So only level 1 operator
@@ -178,6 +183,28 @@ fn _1_9() {
 }
 
 #[test]
+fn _1_10() {
+    #[ops_bounds(T |= U^2)]
+    fn f<T, U>(x: &mut T, y: U) {
+        *x |= y.sqr();
+    }
+
+    #[ops_bounds(T^2 |= U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2) {
+        // It's not possible to write a single expression with the given bounds.
+        let mut result = x.sqr();
+        result |= y;
+        result
+    }
+
+    let mut a = 0b1100;
+    f(&mut a, 3);
+    assert_eq!(a, 0b1101);
+
+    assert_eq!(g(3, 0b1100), 0b1101);
+}
+
+#[test]
 fn _3_3() {
     #[ops_bounds(T | U | V)]
     fn f<T, U, V>(x: T, y: U, z: V) -> ops_type!(T | U | V) {
@@ -284,6 +311,22 @@ fn _3_9() {
 }
 
 #[test]
+fn _3_10() {
+    #[ops_bounds(T | U^2)]
+    fn f<T, U>(x: T, y: U) -> ops_type!(T | U ^ 2) {
+        x | y.sqr()
+    }
+
+    #[ops_bounds(T^2 | U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2 | U) {
+        x.sqr() | y
+    }
+
+    assert_eq!(f(0b1100, 3), 0b1101);
+    assert_eq!(g(3, 0b1100), 0b1101);
+}
+
+#[test]
 fn _4_4() {
     #[ops_bounds(T ^ U ^ V)]
     fn f<T, U, V>(x: T, y: U, z: V) -> ops_type!(T ^ U ^ V) {
@@ -374,6 +417,22 @@ fn _4_9() {
 }
 
 #[test]
+fn _4_10() {
+    #[ops_bounds(T ^ U^2)]
+    fn f<T, U>(x: T, y: U) -> ops_type!(T ^ U ^ 2) {
+        x ^ y.sqr()
+    }
+
+    #[ops_bounds(T^2 ^ U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2 ^ U) {
+        x.sqr() ^ y
+    }
+
+    assert_eq!(f(0b1100, 3), 0b0101);
+    assert_eq!(g(3, 0b1100), 0b0101);
+}
+
+#[test]
 fn _5_5() {
     #[ops_bounds(T & U & V)]
     fn f<T, U, V>(x: T, y: U, z: V) -> ops_type!(T & U & V) {
@@ -448,6 +507,22 @@ fn _5_9() {
 }
 
 #[test]
+fn _5_10() {
+    #[ops_bounds(T & U^2)]
+    fn f<T, U>(x: T, y: U) -> ops_type!(T & U ^ 2) {
+        x & y.sqr()
+    }
+
+    #[ops_bounds(T^2 & U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2 & U) {
+        x.sqr() & y
+    }
+
+    assert_eq!(f(0b1100, 3), 0b1000);
+    assert_eq!(g(3, 0b1100), 0b1000);
+}
+
+#[test]
 fn _6_6() {
     #[ops_bounds(T >> U >> V)]
     fn f<T, U, V>(x: T, y: U, z: V) -> ops_type!(T >> U >> V) {
@@ -505,6 +580,22 @@ fn _6_9() {
     assert_eq!(g(!0b1100, 2), 0b0011);
 }
 
+#[test]
+fn _6_10() {
+    #[ops_bounds(T >> U^2)]
+    fn f<T, U>(x: T, y: U) -> ops_type!(T >> U ^ 2) {
+        x >> y.sqr()
+    }
+
+    #[ops_bounds(T^2 >> U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2 >> U) {
+        x.sqr() >> y
+    }
+
+    assert_eq!(f(0b111_000, 2), 0b000_011);
+    assert_eq!(g(3, 2), 0b0010);
+}
+
 fn _7_7() {
     #[ops_bounds(T + U + V)]
     fn f<T, U, V>(x: T, y: U, z: V) -> ops_type!(T + U + V) {
@@ -546,6 +637,22 @@ fn _7_9() {
     assert_eq!(g(!0b0011, 9), 12);
 }
 
+#[test]
+fn _7_10() {
+    #[ops_bounds(T + U^2)]
+    fn f<T, U>(x: T, y: U) -> ops_type!(T + U ^ 2) {
+        x + y.sqr()
+    }
+
+    #[ops_bounds(T^2 + U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2 + U) {
+        x.sqr() + y
+    }
+
+    assert_eq!(f(9, 2), 13);
+    assert_eq!(g(2, 9), 13);
+}
+
 fn _8_8() {
     #[ops_bounds(T * U * V)]
     fn f<T, U, V>(x: T, y: U, z: V) -> ops_type!(T * U * V) {
@@ -571,6 +678,22 @@ fn _8_9() {
     assert_eq!(g(!0b0011, 4), 12);
 }
 
+#[test]
+fn _8_10() {
+    #[ops_bounds(T * U^2)]
+    fn f<T, U>(x: T, y: U) -> ops_type!(T * U ^ 2) {
+        x * y.sqr()
+    }
+
+    #[ops_bounds(T^2 * U)]
+    fn g<T, U>(x: T, y: U) -> ops_type!(T ^ 2 * U) {
+        x.sqr() * y
+    }
+
+    assert_eq!(f(3, 2), 12);
+    assert_eq!(g(2, 3), 12);
+}
+
 fn _9_9() {
     #[ops_bounds(!!T)]
     fn f<T>(x: T) -> ops_type!(!!T) {
@@ -578,4 +701,24 @@ fn _9_9() {
     }
 
     assert_eq!(f(0b0011), 0b0011);
+}
+
+#[test]
+fn _9_10() {
+    #[ops_bounds(!T^2)]
+    fn f<T>(x: T) -> ops_type!(!T ^ 2) {
+        !x.sqr()
+    }
+
+    assert_eq!(f(3), !0b1001);
+}
+
+#[test]
+fn _10_10() {
+    #[ops_bounds(T^2^2)]
+    fn f<T>(x: T) -> ops_type!(T ^ 2 ^ 2) {
+        x.sqr().sqr()
+    }
+
+    assert_eq!(f(2), 16);
 }

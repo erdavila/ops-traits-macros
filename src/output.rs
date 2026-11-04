@@ -9,10 +9,10 @@ use syn::{
 
 use crate::grammar::{
     AssocTyOpOpsBound, AssocTyPredicate, BinaryOperation, ExprBound, Expression, Operation,
-    Primary, RightOperand, UnaryOperation,
+    Primary, RightOperand, SqrOperation, UnaryOperation,
 };
 use crate::operator::AssocTyOp;
-use crate::{CombineBinOp, NoAssocTyOpOpsBound, Op, OpsBound, OpsExpr, UnOp};
+use crate::{CombineBinOp, NoAssocTyOpOpsBound, Op, OpsBound, OpsExpr};
 
 impl AssocTyOpOpsBound {
     fn into_assoc_ty_op_predicates(
@@ -69,22 +69,48 @@ impl ExprBound {
 impl Operation {
     fn into_predicates(self) -> OperationPredicates<impl Iterator<Item = OperationPredicate>> {
         match self {
+            Operation::Sqr(sqr_oper) => {
+                let preds = sqr_oper.into_predicates();
+                preds.map_sub_preds(alt1of3)
+            }
             Operation::Unary(un_oper) => {
                 let preds = un_oper.into_predicates();
-                preds.map_sub_preds(alt1)
+                preds.map_sub_preds(alt2of3)
             }
             Operation::Binary(bin_oper) => {
                 let preds = bin_oper.into_predicates();
-                preds.map_sub_preds(alt2)
+                preds.map_sub_preds(alt3of3)
             }
         }
     }
 
     fn into_predicate(self) -> OperationPredicate {
         match self {
+            Operation::Sqr(sqr_oper) => sqr_oper.into_predicate(),
             Operation::Unary(un_oper) => un_oper.into_predicate(),
             Operation::Binary(bin_oper) => bin_oper.into_predicate(),
         }
+    }
+}
+
+impl SqrOperation {
+    fn into_predicates(self) -> OperationPredicates<impl Iterator<Item = OperationPredicate>> {
+        let operand_preds = self.operand.into_predicates();
+
+        OperationPredicates {
+            self_pred: OperationPredicate::from_bounded_ty_and_op(
+                operand_preds.self_pred.clone().into_type(),
+                &self.sqrop,
+            ),
+            sub_preds: operand_preds.into_iter(),
+        }
+    }
+
+    fn into_predicate(self) -> OperationPredicate {
+        OperationPredicate::from_bounded_ty_and_op(
+            self.operand.into_predicate().into_type(),
+            &self.sqrop,
+        )
     }
 }
 
@@ -93,7 +119,7 @@ impl UnaryOperation {
         let operand_preds = self.operand.into_predicates();
 
         OperationPredicates {
-            self_pred: Self::make_predicate(
+            self_pred: OperationPredicate::from_bounded_ty_and_op(
                 operand_preds.self_pred.clone().into_type(),
                 &self.unop,
             ),
@@ -102,18 +128,10 @@ impl UnaryOperation {
     }
 
     fn into_predicate(self) -> OperationPredicate {
-        Self::make_predicate(self.operand.into_predicate().into_type(), &self.unop)
-    }
-
-    fn make_predicate(bounded_ty: Type, unop: &UnOp) -> OperationPredicate {
-        OperationPredicate {
-            bounded_ty,
-            bound: Box::new(AssocTyOpBound {
-                trait_path: unop.trait_path(),
-                rhs: None,
-                assoc_ty_name: unop.assoc_type_name(),
-            }),
-        }
+        OperationPredicate::from_bounded_ty_and_op(
+            self.operand.into_predicate().into_type(),
+            &self.unop,
+        )
     }
 }
 
@@ -132,7 +150,7 @@ impl<O: Op> BinaryOperation<O> {
         };
 
         NoAssocTyOpPredicates {
-            self_pred: Self::make_no_assoc_ty_op_predicate(
+            self_pred: NoAssocTyOpPredicate::from_bounded_ty_and_op_and_rhs(
                 left_preds.self_pred.clone().into_type(),
                 &self.binop,
                 rhs,
@@ -140,20 +158,6 @@ impl<O: Op> BinaryOperation<O> {
             sub_preds: left_preds
                 .into_iter()
                 .chain(right_iter.into_iter().flatten()),
-        }
-    }
-
-    fn make_no_assoc_ty_op_predicate(
-        bounded_ty: Type,
-        binop: &O,
-        rhs: Option<Type>,
-    ) -> NoAssocTyOpPredicate {
-        NoAssocTyOpPredicate {
-            bounded_ty,
-            bound: NoAssocTyOpBound {
-                trait_path: binop.trait_path(),
-                rhs,
-            },
         }
     }
 }
@@ -166,7 +170,7 @@ impl BinaryOperation<CombineBinOp> {
 
     fn into_predicate(self) -> OperationPredicate {
         let assoc_ty_name = self.binop.assoc_type_name();
-        let preds = Self::make_no_assoc_ty_op_predicate(
+        let preds = NoAssocTyOpPredicate::from_bounded_ty_and_op_and_rhs(
             self.left.into_type(),
             &self.binop,
             self.right.into_type(),
@@ -180,7 +184,7 @@ impl Expression {
         match self {
             Expression::Primary(primary) => {
                 let preds = primary.into_predicates();
-                preds.map_sub_preds(alt1)
+                preds.map_sub_preds(alt1of2)
             }
             Expression::Operation(operation) => {
                 let oper_preds = operation.into_predicates();
@@ -189,7 +193,7 @@ impl Expression {
                     self_pred: ExpressionPredicate::Operation(oper_preds.self_pred),
                     sub_preds: oper_preds.sub_preds,
                 };
-                preds.map_sub_preds(alt2)
+                preds.map_sub_preds(alt2of2)
             }
         }
         .map_sub_preds(|sub_preds| Box::new(sub_preds) as _)
@@ -242,11 +246,11 @@ impl Primary {
                     self_pred: ExpressionPredicate::TypeOnly(*ty),
                     sub_preds: empty(),
                 };
-                preds.map_sub_preds(alt1)
+                preds.map_sub_preds(alt1of2)
             }
             Primary::Expression { expr, .. } => {
                 let preds = expr.into_predicates();
-                preds.map_sub_preds(alt2)
+                preds.map_sub_preds(alt2of2)
             }
         }
     }
@@ -312,6 +316,16 @@ struct NoAssocTyOpPredicate {
     bound: NoAssocTyOpBound,
 }
 impl NoAssocTyOpPredicate {
+    fn from_bounded_ty_and_op_and_rhs(bounded_ty: Type, op: &impl Op, rhs: Option<Type>) -> Self {
+        NoAssocTyOpPredicate {
+            bounded_ty,
+            bound: NoAssocTyOpBound {
+                trait_path: op.trait_path(),
+                rhs,
+            },
+        }
+    }
+
     fn with_assoc_ty_name(self, assoc_ty_name: Ident) -> OperationPredicate {
         OperationPredicate {
             bounded_ty: self.bounded_ty,
@@ -332,6 +346,17 @@ struct OperationPredicate {
     bound: Box<AssocTyOpBound>,
 }
 impl OperationPredicate {
+    fn from_bounded_ty_and_op(bounded_ty: Type, op: &impl AssocTyOp) -> Self {
+        OperationPredicate {
+            bounded_ty,
+            bound: Box::new(AssocTyOpBound {
+                trait_path: op.trait_path(),
+                rhs: None,
+                assoc_ty_name: op.assoc_type_name(),
+            }),
+        }
+    }
+
     fn into_type(self) -> Type {
         qualified_type(
             &self.bounded_ty,
@@ -423,7 +448,7 @@ pub(crate) fn ops_bounds_to_where_predicates(
                     assocs.insert(assoc);
                 }
 
-                alt1(alt1(preds.sub_preds))
+                alt1of3(preds.sub_preds)
             }
             OpsBound::NoAssocTyOp(ops_bound) => {
                 let preds = ops_bound.into_no_assoc_ty_op_predicates();
@@ -432,7 +457,7 @@ pub(crate) fn ops_bounds_to_where_predicates(
                 let bounds = unique_bounds.entry(bounded_ty).or_default();
                 bounds.no_assoc.insert(bound);
 
-                alt1(alt2(preds.sub_preds))
+                alt2of3(preds.sub_preds)
             }
             OpsBound::Expr(expr_bound) => {
                 let preds = expr_bound.into_expr_bound_predicates();
@@ -444,7 +469,7 @@ pub(crate) fn ops_bounds_to_where_predicates(
                 let bounds = unique_bounds.entry(bounded_ty).or_default();
                 bounds.std.extend(std_bounds);
 
-                alt2(preds.sub_preds)
+                alt3of3(preds.sub_preds)
             }
         };
 
@@ -598,11 +623,21 @@ where
     }
 }
 
-fn alt1<T1, T2>(value: T1) -> Alternative<T1, T2> {
+fn alt1of2<T1, T2>(value: T1) -> Alternative<T1, T2> {
     Alternative::One(value)
 }
-fn alt2<T1, T2>(value: T2) -> Alternative<T1, T2> {
+fn alt2of2<T1, T2>(value: T2) -> Alternative<T1, T2> {
     Alternative::Two(value)
+}
+
+fn alt1of3<T1, T2, T3>(value: T1) -> Alternative<T1, Alternative<T2, T3>> {
+    alt1of2(value)
+}
+fn alt2of3<T1, T2, T3>(value: T2) -> Alternative<T1, Alternative<T2, T3>> {
+    alt2of2(alt1of2(value))
+}
+fn alt3of3<T1, T2, T3>(value: T3) -> Alternative<T1, Alternative<T2, T3>> {
+    alt2of2(alt2of2(value))
 }
 
 #[cfg(test)]

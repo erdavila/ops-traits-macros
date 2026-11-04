@@ -10,13 +10,15 @@
  *
  *  Expressionⁿ := Expressionⁿ⁺ⁱ                               # for n < 9
  *               | Expressionⁿ CombineBinOpⁿ RightOperandⁿ⁺ⁱ   # for n < 9
- *  Expression⁹ := UnOp Expression⁹ | Primary
+ *  Expression⁹ := UnOp Expression⁹ | Expression¹⁰
+ *  Expression¹⁰ := Expression¹⁰ SqrOp | Primary
  *
  *  RightOperandⁿ := '_' | Expressionⁿ
  *  Primary := Type | '(' Expression³ ')'
  *
  *  UnOp := UnOp⁹
  *  NoAssocTyBinOp := NoAssocTyBinOp¹ | NoAssocTyBinOp²
+ *  SqrOp := SqrOp¹⁰
  *
  *  # Operators in order of precedence (https://doc.rust-lang.org/reference/expressions.html#expression-precedence):
  *  NoAssocTyBinOp¹ := '|=' | '^=' | '&=' | '<<=' | '>>=' | '+=' | '-=' | '*=' | '/=' | '%='
@@ -28,6 +30,8 @@
  *  CombineBinOp⁷ := '+' | '-'
  *  CombineBinOp⁸ := '*' | '/' | '%'
  *  UnOp⁹ := '*' | '-' | '!'
+ *  # Additional operator:
+ *  SqrOp¹⁰ := '^' '2'
  *
  *  -----------------------------------------------------------------------------
  *
@@ -40,14 +44,21 @@
  *  NoAssocTyOpOpsBound := BinaryOperation<NoAssocTyBinOp>³˒³
  *  ExprBound := Expression³ ':' TypeParamBound ('+' TypeParamBound)*
  *
- *  Operation := Expression³   # Must reduce to UnaryOperation or BinaryOperation<CombineBinOp>.
+ *  Operation := Expression³   # Must reduce to SqrOperation,
+ *                             #                UnaryOperation or
+ *                             #                BinaryOperation<CombineBinOp>.
  *  UnaryOperation := UnOp Expression⁹
  *  BinaryOperation<O>ᵐ˒ⁿ := Expressionᵐ O RightOperandⁿ
+ *  SqrOperation := Expression¹⁰ SqrOp
  *
  *  Expressionⁿ := Expressionⁿ⁺ⁱ | BinaryOperation<CombineBinOpⁿ>ⁿ˒ⁿ⁺ⁱ   # for n < 9
- *  Expression⁹ := Primary | UnaryOperation
+ *  Expression⁹ := Expression¹⁰ | UnaryOperation
+ *  Expression¹⁰ := Primary | SqrOperation
  *  # General rule:
- *  Expressionˣ := Primary | UnaryOperation | BinaryOperation<CombineBinOpˣ>ˣ˒ˣ⁺ⁱ
+ *  Expressionˣ := Primary
+ *               | SqrOperation
+ *               | UnaryOperation
+ *               | BinaryOperation<CombineBinOpˣ>ˣ˒ˣ⁺ⁱ
  *
  *  AssocTyPredicate := '=' Expression³
  *  RightOperandⁿ := '_' | Expressionⁿ
@@ -59,9 +70,16 @@ use syn::punctuated::Punctuated;
 use syn::token::Paren;
 use syn::{Result, Token, Type, TypeParamBound};
 
+use crate::operator::SqrOp;
 use crate::{CombineBinOp, NoAssocTyBinOp, TryParse, UnOp, parse};
 
 /*
+ *  OpsBound -> AssocTyOpOpsBound
+ *           -> Operation AssocTyPredicate?
+ *           -> SqrOperation ('=' Expression³)?
+ *           -> operand:Expression¹⁰ sqrop:SqrOp ('=' assoc:Expression³)?
+ *  => operand ':' trait(sqrop) ('<' assoc_type_name(sqrop) '=' assoc '>')?
+ *
  *  OpsBound -> AssocTyOpOpsBound
  *           -> Operation AssocTyPredicate?
  *           -> UnaryOperation ('=' Expression³)?
@@ -162,6 +180,11 @@ pub(crate) struct ExprBound {
 
 /*
  * OpsExpr -> Expression³
+ *         -> SqrOperation
+ *         -> operand:Expression¹⁰ sqrop:SqrOp
+ *  => '<' operand 'as' trait(sqrop) '>' '::' assoc_type_name(sqrop)
+ *
+ * OpsExpr -> Expression³
  *         -> UnaryOperation
  *         -> unop:UnOp operand:Expression⁹
  *  => '<' operand 'as' trait(unop) '>' '::' assoc_type_name(unop)
@@ -260,7 +283,7 @@ impl From<Type> for Primary {
 pub(crate) enum Expression {
     // Expressionˣ := Primary
     Primary(Primary),
-    // Expressionˣ := UnaryOperation | BinaryOperation<CombineBinOpˣ>ˣ˒ˣ⁺ⁱ
+    // Expressionˣ := SqrOperation | UnaryOperation | BinaryOperation<CombineBinOpˣ>ˣ˒ˣ⁺ⁱ
     Operation(Operation),
 }
 impl Expression {
@@ -279,10 +302,17 @@ impl<T: Into<Operation>> From<T> for Expression {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Operation {
+    // Operation := SqrOperation
+    Sqr(SqrOperation),
     // Operation := UnaryOperation
     Unary(UnaryOperation),
     // Operation := BinaryOperation<CombineBinOp>
     Binary(BinaryOperation<CombineBinOp>),
+}
+impl From<SqrOperation> for Operation {
+    fn from(value: SqrOperation) -> Self {
+        Operation::Sqr(value)
+    }
 }
 impl From<UnaryOperation> for Operation {
     fn from(value: UnaryOperation) -> Self {
@@ -293,6 +323,12 @@ impl From<BinaryOperation<CombineBinOp>> for Operation {
     fn from(value: BinaryOperation<CombineBinOp>) -> Self {
         Operation::Binary(value)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SqrOperation {
+    pub(crate) operand: Box<Expression>,
+    pub(crate) sqrop: SqrOp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

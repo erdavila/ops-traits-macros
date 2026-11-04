@@ -2,7 +2,10 @@ use syn::parse::ParseStream;
 use syn::token::Paren;
 use syn::{Result, Type, parenthesized};
 
-use crate::grammar::{BinaryOperation, Expression, Primary, RightOperand, UnaryOperation};
+use crate::grammar::{
+    BinaryOperation, Expression, Primary, RightOperand, SqrOperation, UnaryOperation,
+};
+use crate::operator::SqrOp;
 use crate::{CombineBinOp, UnOp};
 
 pub(crate) trait TryParse {
@@ -45,18 +48,18 @@ fn binop_oper(
     next_level: fn(ParseStream) -> Result<Expression>,
 ) -> Result<Expression> {
     // Expressionⁿ := Expressionⁿ⁺ⁱ
-    let mut left = next_level(input)?;
+    let mut expr = next_level(input)?;
 
     while let Some(binop) = try_parse_op(input)? {
         // Expressionⁿ := Expressionⁿ CombineBinOpⁿ RightOperandⁿ⁺ⁱ
-        left = Expression::from(BinaryOperation {
-            left: Box::new(left),
+        expr = Expression::from(BinaryOperation {
+            left: Box::new(expr),
             binop,
             right: RightOperand::parse_with(input, next_level)?,
         });
     }
 
-    Ok(left)
+    Ok(expr)
 }
 
 fn unop_oper(input: ParseStream) -> Result<Expression> {
@@ -67,9 +70,24 @@ fn unop_oper(input: ParseStream) -> Result<Expression> {
             operand: Box::new(unop_oper(input)?),
         }))
     } else {
-        // Expression⁹ := Primary
-        Ok(Expression::Primary(primary(input)?))
+        // Expression⁹ := Expression¹⁰
+        Ok(sqrop_oper(input)?)
     }
+}
+
+fn sqrop_oper(input: ParseStream) -> Result<Expression> {
+    // Expression¹⁰ := Primary
+    let mut expr = Expression::Primary(primary(input)?);
+
+    while let Some(sqrop) = SqrOp::try_parse(input)? {
+        // Expression¹⁰ := Expression¹⁰ SqrOp
+        expr = Expression::from(SqrOperation {
+            operand: Box::new(expr),
+            sqrop,
+        });
+    }
+
+    Ok(expr)
 }
 
 fn primary(input: ParseStream) -> Result<Primary> {

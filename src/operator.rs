@@ -1,7 +1,8 @@
 use proc_macro2::Span;
 use syn::parse::ParseStream;
+use syn::parse::discouraged::Speculative;
 use syn::spanned::Spanned as _;
-use syn::{Error, Ident, Path, Result, Token, custom_punctuation, parse_quote_spanned};
+use syn::{Error, Ident, LitInt, Path, Result, Token, custom_punctuation, parse_quote_spanned};
 
 use crate::TryParse;
 
@@ -72,6 +73,41 @@ macro_rules! impl_assoc_ty_op {
     };
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SqrOp {
+    caret: Token![^],
+    two: LitInt,
+}
+impl TryParse for SqrOp {
+    fn try_parse(input: ParseStream) -> Result<Option<Self>>
+    where
+        Self: Sized,
+    {
+        if input.peek(Token![^]) && input.peek2(LitInt) {
+            let ahead = input.fork();
+            let caret = ahead.parse()?;
+            let two: LitInt = ahead.parse()?;
+
+            if two.base10_digits() == "2" && two.suffix().is_empty() {
+                input.advance_to(&ahead);
+                return Ok(Some(SqrOp { caret, two }));
+            }
+        }
+
+        Ok(None)
+    }
+}
+impl Op for SqrOp {
+    fn trait_path(&self) -> Path {
+        parse_quote_spanned! { self.caret.span() => Sqr }
+    }
+}
+impl AssocTyOp for SqrOp {
+    fn assoc_type_name(&self) -> Ident {
+        parse_quote_spanned! { self.caret.span() => Output }
+    }
+}
+
 // Unary operators that produce a new instance value.
 // Their traits have an associated type for the resulting value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -131,7 +167,11 @@ impl CombineBinOp {
     }
 
     pub(crate) fn try_parse_bitxor(input: ParseStream) -> Result<Option<Self>> {
-        try_parse_token!(input, CombineBinOp { [^] except [^=] => BitXor })
+        if input.peek(Token![^]) && !input.peek(Token![^=]) && !input.peek2(LitInt) {
+            Ok(Some(CombineBinOp::BitXor(input.parse()?)))
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn try_parse_bitand(input: ParseStream) -> Result<Option<Self>> {

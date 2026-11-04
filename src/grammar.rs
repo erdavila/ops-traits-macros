@@ -279,9 +279,9 @@ impl<T: Into<Operation>> From<T> for Expression {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Operation {
-    // Expressionˣ := UnaryOperation
+    // Operation := UnaryOperation
     Unary(UnaryOperation),
-    // Expressionˣ := BinaryOperation<CombineBinOpˣ>ˣ˒ˣ⁺ⁱ
+    // Operation := BinaryOperation<CombineBinOp>
     Binary(BinaryOperation<CombineBinOp>),
 }
 impl From<UnaryOperation> for Operation {
